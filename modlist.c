@@ -12,38 +12,42 @@ MODULE_LICENSE("GPL");
 
 struct list_head mylist; /* Lista enlazada */
 /* Nodos de la lista */
-typedef struct {
+typedef struct list_item {
 	int data;
 	struct list_head links;
 } list_item_t;
 
 static struct proc_dir_entry *proc_entry;
-static char *modlist;  // Space for the "modlist"
+static char *modlistbuffer;  // Space for the "modlist"
+
+static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
+static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
+static void modlist_add(int* num);
+static void modlist_remove(int* num);
+static void modlist_cleanup(void);
+static void print_list(struct list_head* list);
 
 static const struct file_operations proc_entry_fops = {
     .read = modlist_read,
     .write = modlist_write,    
-    .add = modlist_add,
-    .remove = modlist_remove,
-    .cleanup = modlist_cleanup,
 };
 
 int init_modlist_module( void )
 {
   int ret = 0;
-  modlist = (char *)vmalloc( BUFFER_LENGTH );
+  modlistbuffer = (char *)vmalloc( BUFFER_LENGTH );
   INIT_LIST_HEAD( &mylist );
 
 
-  if (!modlist) {
+  if (!modlistbuffer) {
     ret = -ENOMEM;
   } else {
 
-    memset( modlist, 0, BUFFER_LENGTH );
+    memset( modlistbuffer, 0, BUFFER_LENGTH );
     proc_entry = proc_create( "modlist", 0666, NULL, &proc_entry_fops);
     if (proc_entry == NULL) {
       ret = -ENOMEM;
-      vfree(modlist);
+      vfree(modlistbuffer);
       printk(KERN_INFO "modlist: Can't create /proc entry\n");
     } else {
       printk(KERN_INFO "modlist: Module loaded\n");
@@ -57,18 +61,18 @@ int init_modlist_module( void )
 void exit_modlist_module( void )
 {
   remove_proc_entry("modlist", NULL);
-  vfree(modlist);
+  vfree(modlistbuffer);
   printk(KERN_INFO "modlist: Module unloaded.\n");
 }
 
 
-static int modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
+static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
     int nr_bytes = sizeof(int);
     char *kbuf;
     int cont = 0;
     int num =0;
     int tam =0;
-    list_item* item=NULL;
+    struct list_item* item=NULL;
     struct list_head* cur_node=NULL;
     
     if ((*off) > 0) /* Tell the application that there is nothing left to read */
@@ -79,7 +83,7 @@ static int modlist_read(struct file *filp, char __user *buf, size_t len, loff_t 
 
     list_for_each(cur_node, &mylist) {
       /* item points to the structure wherein the links are embedded */
-      item = list_entry(cur_node, list_item, links);
+      item = list_entry(cur_node, struct list_item, links);
       num = item->data;
       //trace_printk("Current value of clipboard: %i\n",num );
       kbuf+= sprintf(kbuf,"%i\n",num);
@@ -103,9 +107,8 @@ static int modlist_read(struct file *filp, char __user *buf, size_t len, loff_t 
     return nr_bytes; 
 }
 
-static int modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
-	  int available_space = BUFFER_LENGTH-1;
-    char kbuf[1000];
+static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
+	int available_space = BUFFER_LENGTH-1;
     int num = 0;
     
     if ((*off) > 0) /* The application can write in this entry just once !! */
@@ -118,55 +121,45 @@ static int modlist_write(struct file *filp, const char __user *buf, size_t len, 
 
     
     /* Transfer data from user to kernel space */
-    if (copy_from_user( &kbuf, buf, len ))  
+    if (copy_from_user( &modlistbuffer, buf, len ))  
       return -EFAULT;
 
     
 
-    if(sscanf(kbuf, "add %i", &num) == 1) {
-      list_item* nodo = vmalloc(sizeof(list_item));
-      
-      nodo->data = num;
+    if(sscanf(modlistbuffer, "add %i", &num) == 1) {
+      modlist_add(&num);
+  	}
 
-      trace_printk("Current list empty: %i\n",list_empty(&mylist) );
-
-      list_add_tail(&nodo->links,&mylist);
-      trace_printk("Current value of clipboard: %i\n",num );
-      trace_printk("Current list empty: %i\n",list_empty(&mylist) );
-  }
-
-  //clipboard[len] = '\0'; /* Add the `\0' */  
-  *off+=len;            /* Update the file pointer */
-  
+  modlistbuffer[len] = '\0'; /* Add the `\0' */  
+  *off+=len;           /* Update the file pointer */
+  print_list(&mylist);
   return len;
 }
 
-static int modlist_add(/* parametros */) {
+static void modlist_add(int* num) {
+	struct list_item* nodo = vmalloc(sizeof(struct list_item));
+      
+    nodo->data = *num;
+
+    list_add_tail(&nodo->links,&mylist);
+}
+
+static void modlist_remove(int* num) {
 
 }
 
-static int modlist_remove(/* parametros */) {
+static void modlist_cleanup(void) {
 
 }
 
-static int modlist_cleanup(/* parametros */) {
-
-}
-
-void print_list(struct list_head* list) {
-  struct list_item_t* item = NULL;
+static void print_list(struct list_head* list) {
+  struct list_item* item = NULL;
   struct list_head* cur_node = NULL;
   list_for_each(cur_node, list) {
   /* item points to the structure wherein the links are embedded */
     item = list_entry(cur_node, struct list_item, links);
     printk(KERN_INFO "%i \n", item->data);
   }
-}
-
-void f(void) {
-  INIT_LIST_HEAD(&my_list); /* Initialize the list */
-  //do_something(&my_list); /* Populate the list */
-  print_list(&my_list);
 }
 
 
