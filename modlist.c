@@ -68,7 +68,6 @@ void exit_modlist_module( void )
 
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
     int nr_bytes = sizeof(int);
-    char *kbuf;
     int cont = 0;
     int num =0;
     int tam =0;
@@ -86,16 +85,16 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
       item = list_entry(cur_node, struct list_item, links);
       num = item->data;
       //trace_printk("Current value of clipboard: %i\n",num );
-      kbuf+= sprintf(kbuf,"%i\n",num);
-      trace_printk("Current value of clipboard: %s\n",kbuf );
+      modlistbuffer+= sprintf(modlistbuffer,"%i\n",num);
+      trace_printk("Current value of clipboard: %s\n",modlistbuffer );
       cont++;
       //printk(KERN_INFO "%i\n",item->data);
       /* Transfer data from the kernel to userspace  */
       
     }
-    kbuf += '\0';
-    tam = strlen(kbuf);
-     if (copy_to_user(buf, kbuf,tam))
+    modlistbuffer += '\0';
+    tam = strlen(modlistbuffer);
+     if (copy_to_user(buf, modlistbuffer,tam))
         return -EINVAL;
     
       /* Transfer data from the kernel to userspace */
