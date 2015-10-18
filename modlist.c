@@ -24,7 +24,7 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static void modlist_add(int num);
 static void modlist_remove(int num);
-static void modlist_cleanup(void);
+static void modlist_cleanup(void); 
 static void print_list(struct list_head* list);
 
 static const struct file_operations proc_entry_fops = {
