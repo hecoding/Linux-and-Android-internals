@@ -52,6 +52,18 @@ void print_list(struct list_head* list) {
 	}
 }
 
+// print del kernel
+static void print_list(struct list_head* list) {
+  struct list_item* item = NULL;
+  struct list_head* cur_node = NULL;
+  list_for_each(cur_node, list) {
+  /* item points to the structure wherein the links are embedded */
+    item = list_entry(cur_node, struct list_item, links);
+
+    printk(KERN_INFO "%i \n", item->data);
+  }
+}
+
 void blah(void) {
 	INIT_LIST_HEAD(&mylist); /* Initialize the list */
 	populate(&mylist);	/* Populate the list */

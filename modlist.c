@@ -27,7 +27,6 @@ static void modlist_add(int num);
 static void modlist_remove(int num);
 static void modlist_cleanup(void);
 static void modlist_sort(struct list_head* list);
-static void print_list(struct list_head* list);
 
 static const struct file_operations proc_entry_fops = {
     .read = modlist_read,
@@ -70,10 +69,9 @@ void exit_modlist_module( void )
 
 
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
-  char* p = modlistbuffer;
-  int cont =0;
   struct list_item* item=NULL;
   struct list_head* cur_node=NULL;
+  ssize_t buf_length = 0;
   
   if ((*off) > 0) /* Tell the application that there is nothing left to read */
     return 0;
@@ -81,21 +79,20 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
   if (len<1)
     return -ENOSPC;
 
+  /* copiar los datos al buffer de modlist */
   list_for_each(cur_node, &mylist) {
     /* item points to the structure wherein the links are embedded */
     item = list_entry(cur_node, struct list_item, links);
-    p+= sprintf(p,"%i\n",item->data);
+    buf_length += sprintf(modlistbuffer + buf_length, "%i\n", item->data);
   }
-  
-  cont = p - modlistbuffer;
 
   /* Transfer data from the kernel to userspace  */
-  if (copy_to_user(buf, modlistbuffer, cont))
+  if (copy_to_user(buf, modlistbuffer, buf_length))
     return -EINVAL;
     
   (*off)+=len;  /* Update the file pointer */
 
-  return cont; 
+  return buf_length;
 }
 
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
@@ -132,7 +129,6 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
 
   modlistbuffer[len] = '\0'; /* Add the `\0' */  
   *off+=len;           /* Update the file pointer */
-  print_list(&mylist);
 
   return len;
 }
@@ -197,17 +193,6 @@ static void modlist_sort(struct list_head* list) {
       }
     }
 
-  }
-}
-
-static void print_list(struct list_head* list) {
-  struct list_item* item = NULL;
-  struct list_head* cur_node = NULL;
-  list_for_each(cur_node, list) {
-  /* item points to the structure wherein the links are embedded */
-    item = list_entry(cur_node, struct list_item, links);
-
-    printk(KERN_INFO "%i \n", item->data);
   }
 }
 
