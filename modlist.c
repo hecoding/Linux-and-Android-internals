@@ -11,6 +11,7 @@ MODULE_LICENSE("GPL");
 #define BUFFER_LENGTH PAGE_SIZE
 
 static struct proc_dir_entry *proc_entry;
+char* modlistbuffer;
 
 /* Nodos de la lista */
 typedef struct list_item {
@@ -36,6 +37,7 @@ static const struct file_operations proc_entry_fops = {
 int init_modlist_module( void )
 {
   int ret = 0;
+  modlistbuffer = (char *)vmalloc( BUFFER_LENGTH );
   INIT_LIST_HEAD( &mylist );
 
 
@@ -62,12 +64,12 @@ void exit_modlist_module( void )
   remove_proc_entry("modlist", NULL);
   //vfree(&mylist); LA CABEZA NO ESTÁ EN MEMORIA DINÁMICA, CON HACER UN CLEANUP VALE
   modlist_cleanup(); // <- porque los demás nodos sí están en memoria dinámica pero mylist en la pila
+  vfree(modlistbuffer);
   printk(KERN_INFO "modlist: Module unloaded.\n");
 }
 
 
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
-  char* modlistbuffer = (char *)vmalloc( BUFFER_LENGTH );
   char* p = modlistbuffer;
   int cont =0;
   struct list_item* item=NULL;
@@ -93,14 +95,11 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
     
   (*off)+=len;  /* Update the file pointer */
 
-  vfree(modlistbuffer);
-
   return cont; 
 }
 
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
   int available_space = BUFFER_LENGTH-1;
-  char* modlistbuffer = (char *)vmalloc( BUFFER_LENGTH );
   int num = 0;
   
   if ((*off) > 0) /* The application can write in this entry just once !! */
@@ -134,8 +133,6 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
   modlistbuffer[len] = '\0'; /* Add the `\0' */  
   *off+=len;           /* Update the file pointer */
   print_list(&mylist);
-
-  vfree(modlistbuffer);
 
   return len;
 }
