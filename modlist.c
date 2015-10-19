@@ -24,7 +24,8 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static void modlist_add(int num);
 static void modlist_remove(int num);
-static void modlist_cleanup(void); 
+static void modlist_cleanup(void);
+static void modlist_sort(struct list_head* list);
 static void print_list(struct list_head* list);
 
 static const struct file_operations proc_entry_fops = {
@@ -66,7 +67,7 @@ void exit_modlist_module( void )
 
 
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
-  char modlistbuffer[BUFFER_LENGTH] = "";
+  char* modlistbuffer = (char *)vmalloc( BUFFER_LENGTH );
   char* p = modlistbuffer;
   int cont =0;
   struct list_item* item=NULL;
@@ -87,17 +88,19 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
   cont = p - modlistbuffer;
 
   /* Transfer data from the kernel to userspace  */
-  if (copy_to_user(buf, &modlistbuffer,cont))
+  if (copy_to_user(buf, modlistbuffer, cont))
     return -EINVAL;
     
   (*off)+=len;  /* Update the file pointer */
+
+  vfree(modlistbuffer);
 
   return cont; 
 }
 
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
   int available_space = BUFFER_LENGTH-1;
-  char modlistbuffer[BUFFER_LENGTH];
+  char* modlistbuffer = (char *)vmalloc( BUFFER_LENGTH );
   int num = 0;
   
   if ((*off) > 0) /* The application can write in this entry just once !! */
@@ -110,7 +113,7 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
 
   
   /* Transfer data from user to kernel space */
-  if (copy_from_user( &modlistbuffer, buf, len ))  
+  if (copy_from_user( &modlistbuffer[0], buf, len ))  
     return -EFAULT;
 
   
@@ -124,10 +127,16 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
   else if(strncmp(modlistbuffer, "cleanup", 7) == 0) {
       modlist_cleanup();
 	}
+  else if(strncmp(modlistbuffer, "sort", 4) == 0) {
+      modlist_sort(&mylist);
+  }
 
   modlistbuffer[len] = '\0'; /* Add the `\0' */  
   *off+=len;           /* Update the file pointer */
   print_list(&mylist);
+
+  vfree(modlistbuffer);
+
   return len;
 }
 
@@ -164,6 +173,33 @@ static void modlist_cleanup(void) {
 
     list_del(cur_node);
     vfree(item);
+  }
+}
+
+static void modlist_sort(struct list_head* list) {
+  struct list_item* item = NULL;
+  struct list_item* nxt = NULL;
+  struct list_head* cur_node = NULL;
+  int still = 1;
+
+  while(still) {
+    still = 0;
+
+    list_for_each(cur_node, list) {
+      /* item points to the structure wherein the links are embedded */
+      item = list_entry(cur_node, struct list_item, links);
+      if((struct list_head*) &( (&(item->links))->next ) == list) break; // es el último, hemos acabado
+      nxt = list_entry(cur_node->next, struct list_item, links);
+
+      if(item->data > nxt->data) {
+        still = 1;
+
+        list_move(cur_node->next, list);
+
+        break; // salir del list_for_each, NO del while
+      }
+    }
+
   }
 }
 
