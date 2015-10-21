@@ -120,10 +120,10 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
   else if(sscanf(modlistbuffer, "remove %i", &num) == 1) {
     modlist_remove(num);
 	}
-  else if(strncmp(modlistbuffer, "cleanup", 7) == 0) {
+  else if(strcmp(modlistbuffer, "cleanup") == 0) {
       modlist_cleanup();
 	}
-  else if(strncmp(modlistbuffer, "sort", 4) == 0) {
+  else if(strcmp(modlistbuffer, "sort") == 0) {
       modlist_sort(&mylist);
   }
 
