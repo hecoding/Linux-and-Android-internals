@@ -5,6 +5,7 @@
 #include <linux/vmalloc.h>
 #include <asm-generic/uaccess.h>
 #include <linux/list.h>
+#include <linux/list_sort.h>
 
 MODULE_LICENSE("GPL");
 
@@ -25,7 +26,8 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
 static void modlist_add(int num);
 static void modlist_remove(int num);
 static void modlist_cleanup(void);
-static void modlist_sort(struct list_head* list);
+static int compare(void *priv, struct list_head *a, struct list_head *b);
+static void modlist_sort(void);
 
 static const struct file_operations proc_entry_fops = {
     .read = modlist_read,
@@ -121,10 +123,12 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
     modlist_remove(num);
 	}
   else if(strcmp(modlistbuffer, "cleanup") == 0) {
+    printk(KERN_INFO "modlist: puto cleanup va\n");
       modlist_cleanup();
 	}
   else if(strcmp(modlistbuffer, "sort") == 0) {
-      modlist_sort(&mylist);
+    printk(KERN_INFO "modlist: puto sort va\n");
+      modlist_sort();
   }
 
   modlistbuffer[len] = '\0'; /* Add the `\0' */  
@@ -170,31 +174,17 @@ static void modlist_cleanup(void) {
   }
 }
 
-static void modlist_sort(struct list_head* list) {
-  struct list_item* item = NULL;
-  struct list_item* nxt = NULL;
-  struct list_head* cur_node = NULL;
-  int still = 1;
+static int compare(void *priv, struct list_head *a, struct list_head *b) {
+  struct list_item* lhs = list_entry(a, struct list_item, links);
+  struct list_item* rhs = list_entry(a, struct list_item, links);
 
-  while(still) {
-    still = 0;
+  if (lhs->data < rhs->data) return -1;
+  if (lhs->data > rhs->data) return 1;
+  return 0;
+}
 
-    list_for_each(cur_node, list) {
-      /* item points to the structure wherein the links are embedded */
-      item = list_entry(cur_node, struct list_item, links);
-      if((struct list_head*) &( (&(item->links))->next ) == list) break; // es el último, hemos acabado
-      nxt = list_entry(cur_node->next, struct list_item, links);
-
-      if(item->data > nxt->data) {
-        still = 1;
-
-        list_move(cur_node->next, list);
-
-        break; // salir del list_for_each, NO del while
-      }
-    }
-
-  }
+static void modlist_sort(void) {
+  list_sort(NULL, &mylist, &compare);
 }
 
 
