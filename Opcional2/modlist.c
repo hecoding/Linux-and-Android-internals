@@ -9,12 +9,13 @@
 MODULE_LICENSE("GPL");
 
 #define BUFFER_LENGTH 1024
+#define STRING_LENGTH 20
 
 static struct proc_dir_entry *proc_entry;
 
 /* Nodos de la lista */
 typedef struct list_item {
-	int data;
+	char string[STRING_LENGTH];
 	struct list_head links;
 } list_item_t;
 
@@ -22,8 +23,8 @@ struct list_head mylist; /* Lista enlazada. OJO todos los demás nodos están en
 
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
-static void modlist_add(int num);
-static void modlist_remove(int num);
+static void modlist_add(char *str);
+static void modlist_remove(char *str);
 static void modlist_cleanup(void);
 
 static const struct file_operations proc_entry_fops = {
@@ -80,7 +81,7 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
   list_for_each(cur_node, &mylist) {
     /* item points to the structure wherein the links are embedded */
     item = list_entry(cur_node, struct list_item, links);
-    buf_length += sprintf(modlistbuffer + buf_length, "%i\n", item->data);
+    buf_length += sprintf(modlistbuffer + buf_length, "%s\n", item->string);
   }
 
   /* Transfer data from the kernel to userspace  */
@@ -96,7 +97,7 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
   char* modlistbuffer = (char *)vmalloc( BUFFER_LENGTH );
   int available_space = BUFFER_LENGTH-1;
-  int num = 0;
+  char str[STRING_LENGTH];
   
   if ((*off) > 0) /* The application can write in this entry just once !! */
     return 0;
@@ -113,11 +114,11 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
 
   
 
-  if(sscanf(modlistbuffer, "add %i", &num) == 1) {
-    modlist_add(num);
+  if(sscanf(modlistbuffer, "add %s", str) == 1) {
+    modlist_add(str);
 	}
-  else if(sscanf(modlistbuffer, "remove %i", &num) == 1) {
-    modlist_remove(num);
+  else if(sscanf(modlistbuffer, "remove %s", str) == 1) {
+    modlist_remove(str);
 	}
   else if(strcmp(modlistbuffer, "cleanup\n") == 0) {
       modlist_cleanup();
@@ -130,15 +131,22 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
   return len;
 }
 
-static void modlist_add(int num) {
-  struct list_item* nodo = vmalloc(sizeof(struct list_item));
-    
-  nodo->data = num;
+static void modlist_add(char *str) {
+  struct list_item* nodo;
+
+  if (STRING_LENGTH < strlen(str)) {
+    printk(KERN_INFO "modlist: string too big!!\n");
+    return;
+  }
+
+  nodo = vmalloc(sizeof(struct list_item));
+  
+  strcpy(nodo->string, str);
 
   list_add_tail(&nodo->links,&mylist);
 }
 
-static void modlist_remove(int num) {
+static void modlist_remove(char *str) {
   struct list_item* item=NULL;
   struct list_head* cur_node=NULL;
   struct list_head* aux=NULL;
@@ -146,7 +154,7 @@ static void modlist_remove(int num) {
   list_for_each_safe(cur_node, aux, &mylist){
   	item = list_entry(cur_node, struct list_item, links);
 
-  	if(item->data == num) {
+  	if(strcmp(item->string, str) == 0) {
   		list_del(cur_node);
       vfree(item);
     }
