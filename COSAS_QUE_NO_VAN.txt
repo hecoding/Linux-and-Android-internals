@@ -1,0 +1,2 @@
+- opcional 1: sort está hecho pero no funciona (está como dijo el profesor)
+- opcional 2: el cleanup no va (no lo he tocado de como estaba antes)
