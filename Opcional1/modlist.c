@@ -5,6 +5,7 @@
 #include <linux/vmalloc.h>
 #include <asm-generic/uaccess.h>
 #include <linux/list.h>
+#include <linux/list_sort.h>
 
 MODULE_LICENSE("GPL");
 
@@ -25,6 +26,8 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
 static void modlist_add(int num);
 static void modlist_remove(int num);
 static void modlist_cleanup(void);
+static int compare(void *priv, struct list_head *a, struct list_head *b);
+static void modlist_sort(void);
 
 static const struct file_operations proc_entry_fops = {
     .read = modlist_read,
@@ -122,6 +125,9 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
   else if(strcmp(modlistbuffer, "cleanup\n") == 0) {
       modlist_cleanup();
 	}
+  else if(strcmp(modlistbuffer, "sort\n") == 0) {
+      modlist_sort();
+  }
 
   modlistbuffer[len] = '\0'; /* Add the `\0' */  
   *off+=len;           /* Update the file pointer */
@@ -164,6 +170,19 @@ static void modlist_cleanup(void) {
     list_del(cur_node);
     vfree(item);
   }
+}
+
+static int compare(void *priv, struct list_head *a, struct list_head *b) {
+  struct list_item* lhs = list_entry(a, struct list_item, links);
+  struct list_item* rhs = list_entry(a, struct list_item, links);
+
+  if (lhs->data < rhs->data) return -1;
+  if (lhs->data > rhs->data) return 1;
+  return 0;
+}
+
+static void modlist_sort(void) {
+  list_sort(NULL, &mylist, &compare);
 }
 
 
