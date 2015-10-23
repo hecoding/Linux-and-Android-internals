@@ -115,6 +115,8 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
   
 
   if(sscanf(modlistbuffer, "add %s", str) == 1) {
+    modlistbuffer[len-1] = '\0';
+    strcpy(str, modlistbuffer + 4);
     modlist_add(str);
 	}
   else if(sscanf(modlistbuffer, "remove %s", str) == 1) {
