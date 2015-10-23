@@ -174,7 +174,7 @@ static void modlist_cleanup(void) {
 
 static int compare(void *priv, struct list_head *a, struct list_head *b) {
   struct list_item* lhs = list_entry(a, struct list_item, links);
-  struct list_item* rhs = list_entry(a, struct list_item, links);
+  struct list_item* rhs = list_entry(b, struct list_item, links);
 
   if (lhs->data < rhs->data) return -1;
   if (lhs->data > rhs->data) return 1;
