@@ -1,4 +1,4 @@
-#include <linux/module.h> 
+#include <linux/module.h>
 #include <asm-generic/errno.h>
 #include <linux/init.h>
 #include <linux/tty.h>      /* For fg_console */
@@ -29,47 +29,48 @@ static inline int set_leds(struct tty_driver* handler, unsigned int mask);
 
 // no copiar esto
 static const struct file_operations proc_entry_fops = {
-    .write = modlist_write,    
+    .write = modlist_write,
 };
 
 int init_modlist_module( void )
 {
   // no copiar esto
-  proc_entry = proc_create( "modlist", 0666, NULL, &proc_entry_fops);
+  proc_entry = proc_create( "modleds", 0666, NULL, &proc_entry_fops);
 
   kbd_driver= get_kbd_driver_handler();
-   set_leds(kbd_driver,ALL_LEDS_ON); 
+   set_leds(kbd_driver,ALL_LEDS_ON);
    return 0;
 }
 
 void exit_modlist_module( void )
 {
-  set_leds(kbd_driver,ALL_LEDS_OFF); 
-  
-  // no pegar en modleds.c
+  set_leds(kbd_driver,ALL_LEDS_OFF);
+
+  // no copiar esto
   printk(KERN_INFO "modlist: Module unloaded.\n");
 }
 
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
   char* modlistbuffer = (char *)vmalloc( 1024 );
   int available_space = 1024-1;
-  int num = 0;
-  
+  unsigned int num = 0;
+
   if ((*off) > 0) /* The application can write in this entry just once !! */
     return 0;
-  
+
   if (len > available_space) {
     printk(KERN_INFO "modlist: not enough space!!\n");
     return -ENOSPC;
   }
 
-  
+
   /* Transfer data from user to kernel space */
-  if (copy_from_user( &modlistbuffer[0], buf, len ))  
+  if (copy_from_user( &modlistbuffer[0], buf, len ))
     return -EFAULT;
 
-  sscanf(modlistbuffer, "%i", &num);
-  set_leds(get_kbd_driver_handler(), num);
+  sscanf(modlistbuffer, "%x", &num);
+  printk(KERN_INFO "meter %x\n", num);
+  set_leds(kbd_driver, num);
 
   vfree(modlistbuffer);
 
@@ -77,7 +78,7 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
 }
 
 static inline int set_leds(struct tty_driver* handler, unsigned int mask){
-    
+
     return (handler->ops->ioctl) (vc_cons[fg_console].d->port.tty, KDSETLED,mask);
 }
 
