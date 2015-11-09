@@ -25,7 +25,7 @@
 MODULE_LICENSE("GPL");
 
 /* Get a minor range for your devices from the usb maintainer */
-#define USB_BLINK_MINOR_BASE	0 
+#define USB_BLINK_MINOR_BASE	0
 
 /* Structure to hold all of our device specific stuff */
 struct usb_blink {
@@ -37,9 +37,9 @@ struct usb_blink {
 
 static struct usb_driver blink_driver;
 
-/* 
+/*
  * Free up the usb_blink structure and
- * decrement the usage count associated with the usb device 
+ * decrement the usage count associated with the usb device
  */
 static void blink_delete(struct kref *kref)
 {
@@ -58,7 +58,7 @@ static int blink_open(struct inode *inode, struct file *file)
 	int retval = 0;
 
 	subminor = iminor(inode);
-	
+
 	/* Obtain reference to USB interface from minor number */
 	interface = usb_find_interface(&blink_driver, subminor);
 	if (!interface) {
@@ -100,11 +100,6 @@ static int blink_release(struct inode *inode, struct file *file)
 #define NR_BYTES_BLINK_MSG 6
 
 
-
-#define NR_SAMPLE_COLORS 4
-
-unsigned int sample_colors[]={0x000011, 0x110000, 0x001100, 0x000000};
-
 /* Called when a user program invokes the write() system call on the device */
 static ssize_t blink_write(struct file *file, const char *user_buffer,
 			  size_t len, loff_t *off)
@@ -112,73 +107,72 @@ static ssize_t blink_write(struct file *file, const char *user_buffer,
 	struct usb_blink *dev=file->private_data;
 	int retval = 0;
 	int i=0;
-	//unsigned char message[NR_BYTES_BLINK_MSG]; // cambiar
-	char* kbuf = (char *)vmalloc( /* n_bytes * tamaño de los chars de cada coso de la cadena de entrada*/ );
-	
-	/* zero fill*/
-	memset(message,0,NR_BYTES_BLINK_MSG);
+	unsigned char message[NR_BYTES_BLINK_MSG];
+	char* kbuf = (char *)vmalloc( 80 ); // 76 bytes máx de entrada + terminador
+	char* kbufp;
+	unsigned int ledcolors[NR_LEDS];
+	char *delim = ",";
+	char* token;
+	unsigned int key;
+	unsigned int value;
 
-	//Copiar cadena alojada en user_buffer a buffer auxiliar (kbuf). No
-	//olvidar incluir el terminador ('\0') ...
-	if (copy_from_user( &kbuf[0], user_buffer, len ))  
+	/* zero fill*/
+	memset(message,0,NR_BYTES_BLINK_MSG * NR_LEDS);
+	memset(ledcolors,0,NR_LEDS); //deja los números que no se tocarán con negro
+
+	if (copy_from_user( &kbuf[0], user_buffer, len ))
     	return -EFAULT;
 
     kbuf[len] = '\0';
 
-	Hacer el parsing de la cadena en kbuf:
-	- Partir en tokens separados con',' con strsep()
-	- Analizar el contenido de cada par (ledn,color) con sscanf()
-	- Rellenar el mensaje correspondiente para el led en cuestión en messages
-	- Si no se especifica un led, meter color negro 0x000000 en ese led
-	// for cada led
-		//ledmessage[i][0]='\x05';
-		//ledmessage[i][1]=0x00;
-		//ledmessage[i][2]=0; 
-		//ledmessage[i][3]=((color>>16) & 0xff); // cambiar por el color
-	 	//ledmessage[i][4]=((color>>8) & 0xff); // cambiar por el color
-	 	//ledmessage[i][5]=(color & 0xff); // cambiar por el color
+    /* parseo */
+    kbufp = kbuf;
+	for (i = 0; i < NR_LEDS && kbufp != NULL && len != 1; i++) {
+		token = strsep(&kbufp, delim);
+		sscanf(token, "%u:%x", &key, &value);
 
-	Enviar los mensajes en messages (uno a uno) al dispositivo con usb_control_msg()
+		ledcolors[key] = value;
+	}
 
-	// esto no sirve
 	/* Fill up the message accordingly */
-	//message[0]='\x05';
-	//message[1]=0x00;
-	//message[2]=0; 
-	//message[3]=((color>>16) & 0xff);
- 	//message[4]=((color>>8) & 0xff);
- 	//message[5]=(color & 0xff);
+	message[0]='\x05';
+	message[1]=0x00;
 
 
-	for (i=0;i<NR_LEDS;i++){ // cambiar para que itere bien con nuestros mensajes
+	for (i=0;i<NR_LEDS;i++){
 
 		message[2]=i; /* Change Led number in message */
-	
-		/* 
-		 * Send message (URB) to the Blinkstick device 
-		 * and wait for the operation to complete 
+		message[3]=((ledcolors[i]>>16) & 0xff); // R
+		message[4]=((ledcolors[i]>>8) & 0xff);	// G
+		message[5]=(ledcolors[i] & 0xff);		// B
+
+		/*
+		 * Send message (URB) to the Blinkstick device
+		 * and wait for the operation to complete
 		 */
-		retval=usb_control_msg(dev->udev,	
+		retval=usb_control_msg(dev->udev,
 			 usb_sndctrlpipe(dev->udev,00), /* Specify endpoint #0 */
-			 USB_REQ_SET_CONFIGURATION, 
+			 USB_REQ_SET_CONFIGURATION,
 			 USB_DIR_OUT| USB_TYPE_CLASS | USB_RECIP_DEVICE,
 			 0x5,	/* wValue */
 			 0, 	/* wIndex=Endpoint # */
-			 message,	/* Pointer to the message */ 
+			 message,	/* Pointer to the message */
 			 NR_BYTES_BLINK_MSG, /* message's size in bytes */
-			 0);		
+			 0);
 
 		if (retval<0){
 			printk(KERN_ALERT "Executed with retval=%d\n",retval);
-			goto out_error;		
+			goto out_error;
 		}
 	}
 
 	(*off)+=len;
+	vfree(kbuf);
+
 	return len;
 
 out_error:
-	return retval;	
+	return retval;
 }
 
 
