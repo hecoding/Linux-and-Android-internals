@@ -4,13 +4,13 @@
 #include <linux/tty.h>      /* For fg_console */
 #include <linux/kd.h>       /* For KDSETLED */
 #include <linux/vt_kern.h>
+#include <linux/syscalls.h>
 
 #define ALL_LEDS_ON 0x7
 #define ALL_LEDS_OFF 0
 
 
 struct tty_driver* kbd_driver= NULL;
-
 
 /* Get driver handler */
 struct tty_driver* get_kbd_driver_handler(void){
@@ -40,6 +40,14 @@ static inline int set_leds(struct tty_driver* handler, unsigned int mask){
   return (handler->ops->ioctl) (vc_cons[fg_console].d->port.tty, KDSETLED,state);
 }
 
+SYSCALL_DEFINE1(ledctl,unsigned int,leds)
+{
+	kbd_driver= get_kbd_driver_handler();
+ 	set_leds(kbd_driver, leds);
+	return 0;
+}
+
+/*
 static int __init modleds_init(void)
 { 
    kbd_driver= get_kbd_driver_handler();
@@ -55,4 +63,4 @@ module_init( init_modleds_module );
 module_exit( exit_modleds_module );
 
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("modleds");
+MODULE_DESCRIPTION("modleds");*/
