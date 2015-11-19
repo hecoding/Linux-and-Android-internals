@@ -46,21 +46,3 @@ SYSCALL_DEFINE1(ledctl,unsigned int,leds)
  	set_leds(kbd_driver, leds);
 	return 0;
 }
-
-/*
-static int __init modleds_init(void)
-{ 
-   kbd_driver= get_kbd_driver_handler();
-   set_leds(kbd_driver,ALL_LEDS_ON); 
-   return 0;
-}
-
-static void __exit modleds_exit(void){
-    set_leds(kbd_driver,ALL_LEDS_OFF); 
-}
-
-module_init( init_modleds_module );
-module_exit( exit_modleds_module );
-
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("modleds");*/
