@@ -3,6 +3,7 @@
 #include <linux/unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #define __NR_ledctl 316
 
 long ledctl(unsigned int leds) {
@@ -11,24 +12,26 @@ long ledctl(unsigned int leds) {
 
 int main () {
 	unsigned int mask = 0;
+	unsigned long ret = 500000;
 	while(1){
-		ledctl(mask);
-		sleep ( 1 );
-		mask = 3;
-		ledctl(mask);
-		sleep ( 1 );
-		mask = 7;
-		ledctl(mask);
-		sleep ( 1 );
-		mask = 6;
-		ledctl(mask);
-		sleep ( 1 );
-		mask = 4;
-		ledctl(mask);
-		sleep ( 1 );
 		mask = 0;
 		ledctl(mask);
-		sleep ( 1 );	
+		usleep (ret);
+		mask = 1;
+		ledctl(mask);
+		usleep (ret);
+		mask = 3;
+		ledctl(mask);
+		usleep (ret);
+		mask = 7;
+		ledctl(mask);
+		usleep (ret);
+		mask = 6;
+		ledctl(mask);
+		usleep (ret);
+		mask = 4;
+		ledctl(mask);
+		usleep (ret);
 }
 	return 0;
 }
