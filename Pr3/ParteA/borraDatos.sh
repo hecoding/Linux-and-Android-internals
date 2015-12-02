@@ -2,5 +2,5 @@
 
 while true;
 do
-	 echo cleanup > /proc/modlist ; 
+	 echo remove 5 > /proc/modlist ; 
 done

@@ -86,11 +86,12 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
     buf_length += sprintf(modlistbuffer + buf_length, "%i\n", item->data);
   }
 
+  spin_unlock(&sp);
+
   /* Transfer data from the kernel to userspace  */
   if (copy_to_user(buf, modlistbuffer, buf_length))
     return -EINVAL;
     
-  spin_unlock(&sp);
 
   (*off)+=len;  /* Update the file pointer */
 
