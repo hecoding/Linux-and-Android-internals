@@ -1,6 +1,7 @@
 #!/bin/bash
 
-while true;
-do
-	 echo remove 5 > /proc/modlist ; 
+for i in $(seq 1 100); do
+	echo remove $i > /proc/modlist
+
+	sleep 0.3
 done

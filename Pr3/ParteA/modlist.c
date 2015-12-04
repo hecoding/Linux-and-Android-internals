@@ -9,7 +9,7 @@
 
 MODULE_LICENSE("GPL");
 
-#define BUFFER_LENGTH 20
+#define BUFFER_LENGTH 240
 DEFINE_SPINLOCK(sp);
 
 static struct proc_dir_entry *proc_entry;
@@ -82,6 +82,9 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
   /* copiar los datos al buffer de modlist */
   list_for_each(cur_node, &mylist) {
     /* item points to the structure wherein the links are embedded */
+    if(buf_length >= BUFFER_LENGTH-1){ // TODO sprintf de lo que hay en el buffer +  lo que leemos
+    	break;
+    }
     item = list_entry(cur_node, struct list_item, links);
     buf_length += sprintf(modlistbuffer + buf_length, "%i\n", item->data);
   }

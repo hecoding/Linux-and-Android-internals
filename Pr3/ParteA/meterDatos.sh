@@ -1,6 +1,7 @@
 #!/bin/bash
-echo add 3 > /proc/modlist
-while true;
-do
-	echo add 5 > /proc/modlist
+
+for i in $(seq 1 100); do
+	echo add $i > /proc/modlist
+
+	sleep 0.3
 done
