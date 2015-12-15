@@ -1,6 +1,10 @@
-#include <stdio.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/proc_fs.h>
+#include <linux/string.h>
+#include <linux/vmalloc.h>
+#include <linux/vmalloc.h>
+#include <asm-generic/uaccess.h>
 #include <asm-generic/errno.h>
 #include <linux/semaphore.h>
 #include "cbuffer.h"
@@ -8,6 +12,7 @@
 #define MAX_ITEMS_CBUF 50
 #define MAX_KBUF 120
 
+static struct proc_dir_entry *proc_entry;
 cbuffer_t* cbuffer; /* Buffer circular */
 int prod_count = 0; /* Número de procesos que abrieron la entrada
 					   /proc para escritura (productores) */
@@ -20,28 +25,8 @@ int nr_prod_waiting=0; /* Número de procesos productores esperando */
 int nr_cons_waiting=0; /* Número de procesos consumidores esperando */
 
 
-/* Funciones de inicialización y descarga del módulo */
-int init_module(void){
-	cbuffer = create_cbuffer_t(MAX_ITEMS_CBUF);
-	sema_init(&mtx, 1);
-	sema_init(&sem_prod, 0);
-	sema_init(&sem_cons, 0);
-
-	if (!cbuf)
-		return -ENOMEM;
-	proc_entry = proc_create("fifoproc",0666, NULL, &proc_entry_fops);
-	if (proc_entry == NULL) {
-		destroy_cbuffer_t(cbuf);
-		return -ENOMEM;
-	}
-
-	printk(KERN_INFO "fifoproc: Module loaded.\n");
-
-	return 0;
-}
-
 void cleanup_module(void){
-	destroy_cbuffer_t(cbuf);
+	destroy_cbuffer_t(cbuffer);
 
 	remove_proc_entry("fifoproc", NULL);
 	printk(KERN_INFO "fifoproc: Module unloaded.\n");
@@ -72,7 +57,7 @@ static int fifoproc_open(struct inode *inode, struct file *file) {
 			}
 			
 			/* "Adquiere" el mutex */
-			if (down_interruptible(&mtx)
+			if (down_interruptible(&mtx))
 				return -EINTR;
 
 		}
@@ -94,7 +79,7 @@ static int fifoproc_open(struct inode *inode, struct file *file) {
 			}
 			
 			/* "Adquiere" el mutex */
-			if (down_interruptible(&mtx)
+			if (down_interruptible(&mtx))
 				return -EINTR;
 
 		}
@@ -102,6 +87,8 @@ static int fifoproc_open(struct inode *inode, struct file *file) {
 
 	/* "Libera" el mutex */
 	up(&mtx);
+
+	return 0;
 }
 
 /* Se invoca al hacer close() de entrada /proc */
@@ -135,6 +122,7 @@ static int fifoproc_release(struct inode *inode, struct file *file){
 
 	/* "Libera" el mutex */
 	up(&mtx);
+	return 0;
 }
 
 /* Se invoca al hacer read() de entrada /proc */
@@ -159,7 +147,7 @@ static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, l
 		}
 		
 		/* "Adquiere" el mutex */
-		if (down_interruptible(&mtx)
+		if (down_interruptible(&mtx))
 			return -EINTR;
 	}
 
@@ -168,7 +156,7 @@ static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, l
 
 	remove_items_cbuffer_t(cbuffer,kbuffer,len);
 
-	if (copy_to_user(kbuffer,buff,len)) { return Error;}
+	if (copy_to_user(kbuffer,buff,len)) { return -EINVAL;}
 
 	/* Despertar a posible productor bloqueado */
 	if (nr_prod_waiting>0) {
@@ -188,8 +176,8 @@ static ssize_t fifoproc_write(struct file *filp, char __user *buff, size_t len, 
 	if (off>0)
 		return 0;
 
-	if (len> MAX_ITEMS_CBUF || len> MAX_KBUF) { return Error;}
-	if (copy_from_user(kbuffer,buff,len)) { return Error;}
+	if (len> MAX_ITEMS_CBUF || len> MAX_KBUF) { return -ENOSPC;}
+	if (copy_from_user(kbuffer,buff,len)) { return -EFAULT;}
 
 	if (down_interruptible(&mtx))
 		return -EINTR;
@@ -209,7 +197,7 @@ static ssize_t fifoproc_write(struct file *filp, char __user *buff, size_t len, 
 		}
 		
 		/* "Adquiere" el mutex */
-		if (down_interruptible(&mtx)
+		if (down_interruptible(&mtx))
 			return -EINTR;
 	}
 
@@ -228,3 +216,33 @@ static ssize_t fifoproc_write(struct file *filp, char __user *buff, size_t len, 
 	up(&mtx); 
 	return len;
 }
+
+static const struct file_operations proc_entry_fops = {
+    .read = fifoproc_read,
+    .write = fifoproc_write, 
+    .open = fifoproc_open,
+    .release = fifoproc_release,   
+};
+
+/* Funciones de inicialización y descarga del módulo */
+int init_module(void){
+	cbuffer = create_cbuffer_t(MAX_ITEMS_CBUF);
+
+	if (!cbuffer)
+		return -ENOMEM;
+
+	sema_init(&mtx, 1);
+	sema_init(&sem_prod, 0);
+	sema_init(&sem_cons, 0);
+
+	proc_entry = proc_create("fifoproc",0666, NULL, &proc_entry_fops);
+	if (proc_entry == NULL) {
+		destroy_cbuffer_t(cbuffer);
+		return -ENOMEM;
+	}
+
+	printk(KERN_INFO "fifoproc: Module loaded.\n");
+
+	return 0;
+}
+
