@@ -26,8 +26,8 @@ int nr_cons_waiting=0; /* Número de procesos consumidores esperando */
 
 void cleanup_fifoproc_module(void){
 	destroy_cbuffer_t(cbuffer);
-	remove_proc_entry("fifoproc", NULL);
-	printk(KERN_INFO "fifoproc: Module unloaded.\n");
+	remove_proc_entry("modfifo", NULL);
+	printk(KERN_INFO "modfifo: Module unloaded.\n");
 }
 
 /* Se invoca al hacer open() de entrada /proc */
@@ -247,13 +247,13 @@ int init_fifoproc_module(void){
 	sema_init(&sem_prod, 0);
 	sema_init(&sem_cons, 0);
 
-	proc_entry = proc_create("fifoproc",0666, NULL, &proc_entry_fops);
+	proc_entry = proc_create("modfifo",0666, NULL, &proc_entry_fops);
 	if (proc_entry == NULL) {
 		destroy_cbuffer_t(cbuffer);
 		return -ENOMEM;
 	}
 
-	printk(KERN_INFO "fifoproc: Module loaded.\n");
+	printk(KERN_INFO "modfifo: Module loaded.\n");
 
 	return 0;
 }
