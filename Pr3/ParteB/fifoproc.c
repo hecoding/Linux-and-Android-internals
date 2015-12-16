@@ -3,14 +3,13 @@
 #include <linux/proc_fs.h>
 #include <linux/string.h>
 #include <linux/vmalloc.h>
-#include <linux/vmalloc.h>
 #include <asm-generic/uaccess.h>
 #include <asm-generic/errno.h>
 #include <linux/semaphore.h>
 #include "cbuffer.h"
 
-#define MAX_ITEMS_CBUF 64
-#define MAX_KBUF 128
+#define MAX_ITEMS_CBUF 50
+#define MAX_KBUF 100
 
 static struct proc_dir_entry *proc_entry;
 cbuffer_t* cbuffer; /* Buffer circular */
@@ -166,7 +165,7 @@ static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, l
 	}
 
 	/* Detectar fin de comunicación por error (productor cierra FIFO antes) */
-	if (prod_count==0 && size_cbuffer_t(cbuffer)==0) {up(&mtx); return 0;}
+	if (prod_count==0 && is_empty_cbuffer_t(cbuffer)) {up(&mtx); return 0;}
 
 	remove_items_cbuffer_t(cbuffer,kbuffer,len);
 
@@ -186,9 +185,6 @@ static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, l
 /* Se invoca al hacer write() de entrada /proc */
 static ssize_t fifoproc_write(struct file *filp, const char __user *buff, size_t len, loff_t *off){
 	char kbuffer[MAX_KBUF]="";
-
-	/*if (off>0)
-		return 0;*/
 
 	if (len> MAX_ITEMS_CBUF || len> MAX_KBUF) { return -ENOSPC;}
 	if (copy_from_user(kbuffer,buff,len)) { return -EFAULT;}

@@ -67,12 +67,14 @@ int fifoproc_read(const char* buff, int len) {
 
 	remove_items_cbuffer_t(cbuffer,kbuffer,len);
 
-	if (copy_to_user(kbuffer,buff,len)) { return Error;}
 
 	/* Despertar a posible productor bloqueado */
 	cond_signal(prod);
 
 	unlock(mtx);
+
+	if (copy_to_user(buff, kbuffer, len)) { return Error;}
+
 	return len;
 }
 
