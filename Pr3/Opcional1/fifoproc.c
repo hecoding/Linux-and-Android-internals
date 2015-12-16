@@ -136,6 +136,7 @@ static int fifoproc_release(struct inode *inode, struct file *file){
 /* Se invoca al hacer read() de entrada /proc */
 static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, loff_t *off){
 	char kbuffer[MAX_KBUF]="";
+	int leido;
         
 	if (len> MAX_ITEMS_FIFO || len> MAX_KBUF) { return -ENOSPC;}
 
@@ -162,10 +163,10 @@ static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, l
 	}
 
 	/* Detectar fin de comunicación por error (productor cierra FIFO antes) */
-	if (prod_count==0 && kfifo_len(&fifobuff)==0) {up(&mtx); return 0;}
+	if (prod_count==0 && kfifo_is_empty(&fifobuff)) {up(&mtx); return 0;}
 
 	// leer kfifo
-	remove_items_cbuffer_t(cbuffer,kbuffer,len);
+	leido = kfifo_out(&fifobuff,kbuffer,len);
 
 	/* Despertar a posible productor bloqueado */
 	if (nr_prod_waiting>0) {
@@ -184,6 +185,7 @@ static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, l
 /* Se invoca al hacer write() de entrada /proc */
 static ssize_t fifoproc_write(struct file *filp, const char __user *buff, size_t len, loff_t *off){
 	char kbuffer[MAX_KBUF]="";
+	int escrito;
 
 	/*if (off>0)
 		return 0;*/
@@ -197,7 +199,7 @@ static ssize_t fifoproc_write(struct file *filp, const char __user *buff, size_t
 		return -EINTR;
 
 	/* Esperar hasta que haya hueco para insertar (debe haber consumidores) */
-	while (nr_gaps_cbuffer_t(cbuffer)<len && cons_count>0){
+	while (kfifo_avail(&fifobuff)<len && cons_count>0){
 		nr_prod_waiting++;
 		up(&mtx); /* "Libera" el mutex */
 		
@@ -218,7 +220,7 @@ static ssize_t fifoproc_write(struct file *filp, const char __user *buff, size_t
 	/* Detectar fin de comunicación por error (consumidor cierra FIFO antes) */
 	if (cons_count==0) {up(&mtx); return -EPIPE;}
 
-	insert_items_cbuffer_t(cbuffer,kbuffer,len); // USAR OUT TO USER
+	escrito = kfifo_in(&fifobuff,kbuffer,len);
 
 	/* Despertar a posible consumidor bloqueado */
 	if (nr_cons_waiting>0) {
@@ -252,21 +254,21 @@ int init_fifoproc_module(void){
 	sema_init(&sem_prod, 0);
 	sema_init(&sem_cons, 0);
 
-	proc_entry = proc_create("fifoproc",0666, NULL, &proc_entry_fops);
+	proc_entry = proc_create("modfifo",0666, NULL, &proc_entry_fops);
 	if (proc_entry == NULL) {
 		kfifo_free(&fifobuff);
 		return -ENOMEM;
 	}
 
-	printk(KERN_INFO "fifoproc: Module loaded.\n");
+	printk(KERN_INFO "modfifo: Module loaded.\n");
 
 	return 0;
 }
 
 void cleanup_fifoproc_module(void){
 	kfifo_free(&fifobuff);
-	remove_proc_entry("fifoproc", NULL);
-	printk(KERN_INFO "fifoproc: Module unloaded.\n");
+	remove_proc_entry("modfifo", NULL);
+	printk(KERN_INFO "modfifo: Module unloaded.\n");
 }
 
 module_init( init_fifoproc_module );
