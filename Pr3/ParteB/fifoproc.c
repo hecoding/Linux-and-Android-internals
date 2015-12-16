@@ -9,8 +9,8 @@
 #include <linux/semaphore.h>
 #include "cbuffer.h"
 
-#define MAX_ITEMS_CBUF 50
-#define MAX_KBUF 120
+#define MAX_ITEMS_CBUF 64
+#define MAX_KBUF 128
 
 static struct proc_dir_entry *proc_entry;
 cbuffer_t* cbuffer; /* Buffer circular */
@@ -25,9 +25,8 @@ int nr_prod_waiting=0; /* Número de procesos productores esperando */
 int nr_cons_waiting=0; /* Número de procesos consumidores esperando */
 
 
-void cleanup_module(void){
+void cleanup_fifoproc_module(void){
 	destroy_cbuffer_t(cbuffer);
-
 	remove_proc_entry("fifoproc", NULL);
 	printk(KERN_INFO "fifoproc: Module unloaded.\n");
 }
@@ -42,13 +41,19 @@ static int fifoproc_open(struct inode *inode, struct file *file) {
 	if (file->f_mode & FMODE_READ) {
 		// un consumidor abrió el fifo
 		cons_count++;
+		
+		if (nr_prod_waiting>0) {
+			/* Despierta a uno de los hilos bloqueados */
+			up(&sem_prod);
+			nr_prod_waiting--;
+		}
 
 		while (prod_count==0) {
 			nr_cons_waiting++;
 			up(&mtx); /* "Libera" el mutex */
 			
 			/* Se bloquea en la cola */
-			if (down_interruptible(&sem_prod)){
+			if (down_interruptible(&sem_cons)){
 				down(&mtx);
 				nr_cons_waiting--;
 				up(&mtx);
@@ -65,12 +70,19 @@ static int fifoproc_open(struct inode *inode, struct file *file) {
 	} else {
 		// un productor abrió el fifo
 		prod_count++;
+
+		if (nr_cons_waiting>0) {
+			/* Despierta a uno de los hilos bloqueados */
+			up(&sem_cons);
+			nr_cons_waiting--;
+		}
+
 		while (cons_count==0) {
 			nr_prod_waiting++;
 			up(&mtx); /* "Libera" el mutex */
 			
 			/* Se bloquea en la cola */
-			if (down_interruptible(&sem_cons)){
+			if (down_interruptible(&sem_prod)){
 				down(&mtx);
 				nr_prod_waiting--;
 				up(&mtx);
@@ -127,7 +139,9 @@ static int fifoproc_release(struct inode *inode, struct file *file){
 
 /* Se invoca al hacer read() de entrada /proc */
 static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, loff_t *off){
-	char kbuffer[MAX_KBUF];
+	char kbuffer[MAX_KBUF]="";
+        
+	if (len> MAX_ITEMS_CBUF || len> MAX_KBUF) { return -ENOSPC;}
 
 	if (down_interruptible(&mtx))
 		return -EINTR;
@@ -138,7 +152,7 @@ static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, l
 		up(&mtx); /* "Libera" el mutex */
 		
 		/* Se bloquea en la cola */
-		if (down_interruptible(&sem_prod)){
+		if (down_interruptible(&sem_cons)){
 			down(&mtx);
 			nr_cons_waiting--;
 			up(&mtx);
@@ -152,11 +166,9 @@ static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, l
 	}
 
 	/* Detectar fin de comunicación por error (productor cierra FIFO antes) */
-	if (prod_count==0 && is_empty_cbuffer_t(cbuffer)) {up(&mtx); return 0;}
+	if (prod_count==0 && size_cbuffer_t(cbuffer)==0) {up(&mtx); return 0;}
 
 	remove_items_cbuffer_t(cbuffer,kbuffer,len);
-
-	if (copy_to_user(kbuffer,buff,len)) { return -EINVAL;}
 
 	/* Despertar a posible productor bloqueado */
 	if (nr_prod_waiting>0) {
@@ -166,31 +178,35 @@ static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, l
 	}
 
 	up(&mtx); 
+	if (copy_to_user(buff, kbuffer, len)) { return -EINVAL;}
+	(*off)+=len;
 	return len;
 }
 
 /* Se invoca al hacer write() de entrada /proc */
 static ssize_t fifoproc_write(struct file *filp, const char __user *buff, size_t len, loff_t *off){
-	char kbuffer[MAX_KBUF];
+	char kbuffer[MAX_KBUF]="";
 
-	if (off>0)
-		return 0;
+	/*if (off>0)
+		return 0;*/
 
 	if (len> MAX_ITEMS_CBUF || len> MAX_KBUF) { return -ENOSPC;}
 	if (copy_from_user(kbuffer,buff,len)) { return -EFAULT;}
+	kbuffer[len] = '\0';
+	*off += len;
 
 	if (down_interruptible(&mtx))
 		return -EINTR;
 
 	/* Esperar hasta que haya hueco para insertar (debe haber consumidores) */
 	while (nr_gaps_cbuffer_t(cbuffer)<len && cons_count>0){
-		nr_cons_waiting++;
+		nr_prod_waiting++;
 		up(&mtx); /* "Libera" el mutex */
 		
 		/* Se bloquea en la cola */
 		if (down_interruptible(&sem_prod)){
 			down(&mtx);
-			nr_cons_waiting--;
+			nr_prod_waiting--;
 			up(&mtx);
 			
 			return -EINTR;
@@ -218,14 +234,14 @@ static ssize_t fifoproc_write(struct file *filp, const char __user *buff, size_t
 }
 
 static const struct file_operations proc_entry_fops = {
-    .read = fifoproc_read,
-    .write = fifoproc_write, 
     .open = fifoproc_open,
-    .release = fifoproc_release,   
+    .release = fifoproc_release,
+    .read = fifoproc_read,
+    .write = fifoproc_write,    
 };
 
 /* Funciones de inicialización y descarga del módulo */
-int init_module(void){
+int init_fifoproc_module(void){
 	cbuffer = create_cbuffer_t(MAX_ITEMS_CBUF);
 
 	if (!cbuffer)
@@ -246,3 +262,5 @@ int init_module(void){
 	return 0;
 }
 
+module_init( init_fifoproc_module );
+module_exit( cleanup_fifoproc_module );
