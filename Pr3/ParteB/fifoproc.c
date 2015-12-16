@@ -170,7 +170,7 @@ static ssize_t fifoproc_read(struct file *filp, char __user *buff, size_t len, l
 }
 
 /* Se invoca al hacer write() de entrada /proc */
-static ssize_t fifoproc_write(struct file *filp, char __user *buff, size_t len, loff_t *off){
+static ssize_t fifoproc_write(struct file *filp, const char __user *buff, size_t len, loff_t *off){
 	char kbuffer[MAX_KBUF];
 
 	if (off>0)
