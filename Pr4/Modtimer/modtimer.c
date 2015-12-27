@@ -55,7 +55,7 @@ static void fire_timer(unsigned long data);
 static void copy_items_into_list_func(struct work_struct *work);
 /* Linked list auxiliary functions */
 static void modlist_add(unsigned int num);
-static void modlist_remove(unsigned int num);
+static struct list_item* modlist_pop(void);
 static void list_cleanup(void);
 
 /* FILE OPS FOR PROC ENTRIES */
@@ -163,9 +163,8 @@ static void copy_items_into_list_func(struct work_struct *work) {
         modlist_add(data); // list lock inside
 
         count++;
+        up(&sem_list); /* one more item into the list */
     }
-
-    up(&sem_list);
 
     printk(KERN_INFO "%u elements moved from the buffer to the list\n", count);
 }
@@ -257,7 +256,6 @@ static int modtimer_release(struct inode *inode, struct file *file) {
 }
 
 static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
-    struct list_head* node = mylist.prev; // last of the list
     struct list_item* item = NULL;
     char modlistbuffer[BUFFER_LENGTH];
     ssize_t buf_length = 0;
@@ -271,10 +269,7 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
     if(down_interruptible(&sem_list)) /* Hang in until there are items to read */
         return -EINTR;
 
-    spin_lock(&list_sp);
-    item = list_last_entry(node, struct list_item, links);
-    list_del(node);
-    spin_unlock(&list_sp);
+    item = modlist_pop();
 
     buf_length = sprintf(modlistbuffer, "%u\n", item->data);
     vfree(item);
@@ -282,7 +277,6 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
     /* Transfer data from the kernel to userspace  */
     if (copy_to_user(buf, modlistbuffer, buf_length))
     return -EINVAL;
-
 
     (*off)+=len;  /* Update the file pointer */
 
@@ -299,21 +293,19 @@ static void modlist_add(unsigned int num) {
     spin_unlock(&list_sp); 
 }
 
-static void modlist_remove(unsigned int num) {
-    struct list_item* item=NULL;
-    struct list_head* cur_node=NULL;
-    struct list_head* aux=NULL;
+static struct list_item* modlist_pop(void) {
+    struct list_head* node=NULL;
+    struct list_item* item = NULL;
 
-    spin_lock(&list_sp); 
-    list_for_each_safe(cur_node, aux, &mylist){
-        item = list_entry(cur_node, struct list_item, links);
+    spin_lock(&list_sp);
 
-        if(item->data == num) {
-            list_del(cur_node);
-            vfree(item);
-        }
-    }
-    spin_unlock(&list_sp); 
+    node = mylist.next;
+    item = list_entry(node, struct list_item, links);
+    list_del(node);
+
+    spin_unlock(&list_sp);
+
+    return item;
 }
 
 static void list_cleanup(void) {
