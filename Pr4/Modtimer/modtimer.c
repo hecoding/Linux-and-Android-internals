@@ -8,26 +8,39 @@
 #include <linux/random.h>
 #include <linux/kfifo.h>
 #include <linux/spinlock.h>
+#include <linux/semaphore.h>
+#include <linux/list.h>
 
 MODULE_LICENSE("GPL");
 
 
+/* CONSTANTS */
 #define DEFAULT_TIMER_PERIOD HZ
 #define DEFAULT_MAX_RANDOM 300
 #define DEFAULT_EMERGENCY_THRESHOLD 80
 #define CONFIG_BUFFER_LENGTH 100
-#define MAX_ITEMS_FIFO 10 // kfifo uses 2-base sizes and rounds-up
+#define MAX_ITEMS_FIFO 10 // kfifo uses 2-base sizes and rounds-up the power
 
+/* GLOBAL VARIABLES */
 static struct proc_dir_entry *proc_entry; /* modtimer entry */
 static struct proc_dir_entry *proc_config; /* modconfig entry */
 struct timer_list timer; /* Structure that describes the kernel timer */
 static ssize_t timer_period, max_random, emergency_threshold;
 static struct kfifo fifobuff; /* Circular buffer */
-struct work_struct copy_items_into_list;
+struct work_struct copy_items_into_list_ws;
+typedef struct list_item { /* Node of the list */
+    unsigned int data;
+    struct list_head links;
+} list_item_t;
+struct list_head mylist; /* head of the linked list. all the nodes are in dynamic memory. */
 
+/* SYNCHRONIZATION VARIABLES */
 DEFINE_SPINLOCK(timer_sp);
+DEFINE_SPINLOCK(list_sp);
+struct semaphore sem_list; /* user queue consumer */
 
 
+/* PROTOTYPES */
 static ssize_t modtimer_config_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 static ssize_t modtimer_config_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 /* Invoked when calling open() at /proc entry */
@@ -38,8 +51,13 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
 /* Function invoked when timer expires (fires) */
 static void fire_timer(unsigned long data);
 /* Work's handler function, invoked to move the data in the buffer to a list */
-static void buff_wq_function(struct work_struct *work);
+static void copy_items_into_list_func(struct work_struct *work);
+/* Linked list auxiliary functions */
+static void modlist_add(unsigned int num);
+static void modlist_remove(unsigned int num);
+static void list_cleanup(void);
 
+/* FILE OPS FOR PROC ENTRIES */
 static const struct file_operations proc_entry_fops = {
     .open = modtimer_open,
     .release = modtimer_release,
@@ -51,6 +69,7 @@ static const struct file_operations proc_conf_entry_fops = {
     .write = modtimer_config_write,
 };
 
+/* FUNCTIONS */
 int init_modtimer( void ) {
     int ret;
 
@@ -76,7 +95,16 @@ int init_modtimer( void ) {
     }
 
     /* KFIFO WORK STRUCTURE SETUP */
-    INIT_WORK(&copy_items_into_list, buff_wq_function);
+    INIT_WORK(&copy_items_into_list_ws, copy_items_into_list_func);
+
+    /* LINKED LIST SETUP */
+    INIT_LIST_HEAD( &mylist );
+
+    if (!list_empty(&mylist))
+        return -ENOMEM;
+
+    /* USER WAITING QUEUE SETUP */
+    sema_init(&sem_list, 0);
 
     /* TIMER SETUP */
     timer_period = DEFAULT_TIMER_PERIOD;
@@ -106,6 +134,7 @@ void exit_modtimer( void ) {
     flush_scheduled_work();
 
     kfifo_free(&fifobuff);
+    list_cleanup();
 
     remove_proc_entry("modtimer", NULL);
     remove_proc_entry("modconfig", NULL);
@@ -123,15 +152,31 @@ static void fire_timer(unsigned long data) {
     kfifo_put(&fifobuff, rand_number); // kfifo_in_spinlocked would be fine if not irqsave
     spin_unlock_irqrestore(&timer_sp, flags);
 
-    if (!work_pending(&copy_items_into_list) && ((kfifo_len(&fifobuff) * 100 / kfifo_size(&fifobuff)) >= emergency_threshold))
-        schedule_work_on(!smp_processor_id(), &copy_items_into_list); // just 2 cpus, 0 or 1. get the other one and queue work
+    if (!work_pending(&copy_items_into_list_ws) && ((kfifo_len(&fifobuff) * 100 / kfifo_size(&fifobuff)) >= emergency_threshold))
+        schedule_work_on(!smp_processor_id(), &copy_items_into_list_ws); // just 2 cpus, 0 or 1. get the other one and queue work
 
     /* Re-activate the timer 'timer_period' from now */
     mod_timer( &(timer), jiffies + timer_period);
 }
 
-static void buff_wq_function(struct work_struct *work) {
-    printk(KERN_INFO "%u elements moved from the buffer to the list\n", kfifo_len(&fifobuff));
+static void copy_items_into_list_func(struct work_struct *work) {
+    unsigned int data = 0;
+    unsigned long flags = 0;
+    unsigned int count = 0;
+    unsigned int n;
+
+    while(!kfifo_is_empty(&fifobuff)) {
+        spin_lock_irqsave(&timer_sp, flags); // can't take off the loop. blocking calls in modlist_add
+        n = kfifo_get(&fifobuff, &data);
+        spin_unlock_irqrestore(&timer_sp, flags);
+
+        modlist_add(data); // list lock inside
+        count++;
+    }
+
+    up(&sem_list);
+
+    printk(KERN_INFO "%u elements moved from the buffer to the list\n", count);
 }
 
 static ssize_t modtimer_config_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
@@ -206,7 +251,54 @@ static int modtimer_release(struct inode *inode, struct file *file) {
 }
 
 static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
+    // ...
+    if(down_interruptible(&sem_list))
+        return -EINTR;
 
+    // block to consume list elem
+    // ...
+}
+
+static void modlist_add(unsigned int num) {
+    struct list_item* nodo = vmalloc(sizeof(struct list_item));
+
+    nodo->data = num;
+
+    spin_lock(&list_sp);
+    list_add_tail(&nodo->links,&mylist);
+    spin_unlock(&list_sp); 
+}
+
+static void modlist_remove(unsigned int num) {
+    struct list_item* item=NULL;
+    struct list_head* cur_node=NULL;
+    struct list_head* aux=NULL;
+
+    spin_lock(&list_sp); 
+    list_for_each_safe(cur_node, aux, &mylist){
+        item = list_entry(cur_node, struct list_item, links);
+
+        if(item->data == num) {
+            list_del(cur_node);
+            vfree(item);
+        }
+    }
+    spin_unlock(&list_sp); 
+}
+
+static void list_cleanup(void) {
+    struct list_item* item=NULL;
+    struct list_head* cur_node=NULL;
+    struct list_head* aux=NULL;
+
+    spin_lock(&list_sp); 
+    list_for_each_safe(cur_node, aux, &mylist){
+        item = list_entry(cur_node, struct list_item, links);
+
+        list_del(cur_node);
+        vfree(item);
+    }
+    spin_unlock(&list_sp);
 }
 
 module_init( init_modtimer );
