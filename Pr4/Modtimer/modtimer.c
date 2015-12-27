@@ -19,6 +19,7 @@ MODULE_LICENSE("GPL");
 #define DEFAULT_MAX_RANDOM 300
 #define DEFAULT_EMERGENCY_THRESHOLD 80
 #define CONFIG_BUFFER_LENGTH 100
+#define BUFFER_LENGTH 20
 #define MAX_ITEMS_FIFO 10 // kfifo uses 2-base sizes and rounds-up the power
 
 /* GLOBAL VARIABLES */
@@ -35,7 +36,7 @@ typedef struct list_item { /* Node of the list */
 struct list_head mylist; /* head of the linked list. all the nodes are in dynamic memory. */
 
 /* SYNCHRONIZATION VARIABLES */
-DEFINE_SPINLOCK(timer_sp);
+DEFINE_SPINLOCK(cbuff_sp);
 DEFINE_SPINLOCK(list_sp);
 struct semaphore sem_list; /* user queue consumer */
 
@@ -116,9 +117,7 @@ int init_modtimer( void ) {
     /* Initialize field */
     timer.data=0;
     timer.function=fire_timer;
-    timer.expires=jiffies + timer_period;  /* Activate it X seconds from now */
-    /* Activate the timer for the first time */
-    add_timer(&timer);
+    timer.expires=0;
 
     printk(KERN_INFO "modtimer: Module loaded.\n");
 
@@ -127,15 +126,6 @@ int init_modtimer( void ) {
 
 
 void exit_modtimer( void ) {
-    /* Wait until completion of the timer function (if it's currently running) and delete timer */
-    del_timer_sync(&timer);
-
-    /* Wait until all jobs scheduled so far have finished */
-    flush_scheduled_work();
-
-    kfifo_free(&fifobuff);
-    list_cleanup();
-
     remove_proc_entry("modtimer", NULL);
     remove_proc_entry("modconfig", NULL);
 
@@ -148,15 +138,15 @@ static void fire_timer(unsigned long data) {
     unsigned int rand_number = get_random_int() % (max_random - 1);
     printk(KERN_INFO "Generated number: %u\n", rand_number);
 
-    spin_lock_irqsave(&timer_sp, flags);
+    spin_lock_irqsave(&cbuff_sp, flags);
     kfifo_put(&fifobuff, rand_number); // kfifo_in_spinlocked would be fine if not irqsave
-    spin_unlock_irqrestore(&timer_sp, flags);
+    spin_unlock_irqrestore(&cbuff_sp, flags);
 
     if (!work_pending(&copy_items_into_list_ws) && ((kfifo_len(&fifobuff) * 100 / kfifo_size(&fifobuff)) >= emergency_threshold))
         schedule_work_on(!smp_processor_id(), &copy_items_into_list_ws); // just 2 cpus, 0 or 1. get the other one and queue work
 
     /* Re-activate the timer 'timer_period' from now */
-    mod_timer( &(timer), jiffies + timer_period);
+    mod_timer(&(timer), jiffies + timer_period);
 }
 
 static void copy_items_into_list_func(struct work_struct *work) {
@@ -166,11 +156,12 @@ static void copy_items_into_list_func(struct work_struct *work) {
     unsigned int n;
 
     while(!kfifo_is_empty(&fifobuff)) {
-        spin_lock_irqsave(&timer_sp, flags); // can't take off the loop. blocking calls in modlist_add
+        spin_lock_irqsave(&cbuff_sp, flags); // can't take off the loop. blocking calls in modlist_add
         n = kfifo_get(&fifobuff, &data);
-        spin_unlock_irqrestore(&timer_sp, flags);
+        spin_unlock_irqrestore(&cbuff_sp, flags);
 
         modlist_add(data); // list lock inside
+
         count++;
     }
 
@@ -239,24 +230,63 @@ static ssize_t modtimer_config_write(struct file *filp, const char __user *buf, 
 }
 
 static int modtimer_open(struct inode *inode, struct file *file) {
-    // ...
+
+    /* Activate it X seconds from now */
+    timer.expires=jiffies + timer_period;
+    /* Activate the timer */
+    add_timer(&timer);
 
     try_module_get(THIS_MODULE);
+
+    return 0;
 }
 
 static int modtimer_release(struct inode *inode, struct file *file) {
-    // ...
+    /* Wait until completion of the timer function (if it's currently running) and delete timer */
+    del_timer_sync(&timer);
+
+    /* Wait until all jobs scheduled so far have finished */
+    flush_scheduled_work();
+
+    kfifo_free(&fifobuff);
+    list_cleanup();
 
     module_put(THIS_MODULE);
+
+    return 0;
 }
 
 static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
-    // ...
-    if(down_interruptible(&sem_list))
+    struct list_head* node = mylist.prev; // last of the list
+    struct list_item* item = NULL;
+    char modlistbuffer[BUFFER_LENGTH];
+    ssize_t buf_length = 0;
+
+    if ((*off) > 0) /* Tell the application there is nothing left to read */
+        return 0;
+
+    if (len<1)
+        return -ENOSPC;
+
+    if(down_interruptible(&sem_list)) /* Hang in until there are items to read */
         return -EINTR;
 
-    // block to consume list elem
-    // ...
+    spin_lock(&list_sp);
+    item = list_last_entry(node, struct list_item, links);
+    list_del(node);
+    spin_unlock(&list_sp);
+
+    buf_length = sprintf(modlistbuffer, "%u\n", item->data);
+    vfree(item);
+
+    /* Transfer data from the kernel to userspace  */
+    if (copy_to_user(buf, modlistbuffer, buf_length))
+    return -EINVAL;
+
+
+    (*off)+=len;  /* Update the file pointer */
+
+    return buf_length;
 }
 
 static void modlist_add(unsigned int num) {
