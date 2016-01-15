@@ -37,7 +37,7 @@ struct list_head mylist; /* head of the linked list. all the nodes are in dynami
 
 /* SYNCHRONIZATION VARIABLES */
 DEFINE_SPINLOCK(cbuff_sp);
-DEFINE_SPINLOCK(list_sp);
+struct semaphore list_mtx;
 struct semaphore sem_list; /* user queue consumer */
 
 
@@ -257,19 +257,24 @@ static int modtimer_release(struct inode *inode, struct file *file) {
 
 static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
     struct list_item* item = NULL;
+    struct list_head* node=NULL;
     char modlistbuffer[BUFFER_LENGTH];
     ssize_t buf_length = 0;
-
-    if ((*off) > 0) /* Tell the application there is nothing left to read */
-        return 0;
 
     if (len<1)
         return -ENOSPC;
 
+    if (down_interruptible(&list_mtx))
+    	return -EINTR;
+
     if(down_interruptible(&sem_list)) /* Hang in until there are items to read */
         return -EINTR;
 
-    item = modlist_pop();
+    // list_for_each(cur_node, &mylist) {
+    	item = list_entry(node, struct list_item, links);
+    	list_del(node);
+
+    up(&list_mtx);
 
     buf_length = sprintf(modlistbuffer, "%u\n", item->data);
     vfree(item);
@@ -288,22 +293,18 @@ static void modlist_add(unsigned int num) {
 
     nodo->data = num;
 
-    spin_lock(&list_sp);
+    if (down_interruptible(&list_mtx))
+    	return -EINTR;
+
     list_add_tail(&nodo->links,&mylist);
-    spin_unlock(&list_sp); 
+
+    up(&list_mtx); 
 }
 
 static struct list_item* modlist_pop(void) {
-    struct list_head* node=NULL;
-    struct list_item* item = NULL;
+    
 
-    spin_lock(&list_sp);
-
-    node = mylist.next;
-    item = list_entry(node, struct list_item, links);
-    list_del(node);
-
-    spin_unlock(&list_sp);
+    
 
     return item;
 }
@@ -313,14 +314,17 @@ static void list_cleanup(void) {
     struct list_head* cur_node=NULL;
     struct list_head* aux=NULL;
 
-    spin_lock(&list_sp); 
+    if (down_interruptible(&list_mtx))
+    	return -EINTR;
+
     list_for_each_safe(cur_node, aux, &mylist){
         item = list_entry(cur_node, struct list_item, links);
 
         list_del(cur_node);
         vfree(item);
     }
-    spin_unlock(&list_sp);
+
+    up(&list_mtx);
 }
 
 module_init( init_modtimer );
