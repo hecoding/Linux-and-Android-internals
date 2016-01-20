@@ -5,7 +5,7 @@ make
 echo
 echo ---------------------------------------------
 echo
-sudo insmod modtimer.ko
+sudo insmod proctimer.ko
 echo dmesg:
 dmesg | tail -n 1
 echo lsmod:

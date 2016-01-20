@@ -4,9 +4,10 @@
 #include <linux/string.h>
 #include <linux/timer.h>
 #include <asm-generic/uaccess.h>
+#include <asm-generic/errno.h>
 #include <linux/jiffies.h>
 #include <linux/random.h>
-#include <linux/kfifo.h>
+#include "cbuffer.h"
 #include <linux/spinlock.h>
 #include <linux/semaphore.h>
 #include <linux/list.h>
@@ -19,16 +20,15 @@ MODULE_LICENSE("GPL");
 #define DEFAULT_TIMER_PERIOD HZ
 #define DEFAULT_MAX_RANDOM 300
 #define DEFAULT_EMERGENCY_THRESHOLD 80
-#define CONFIG_BUFFER_LENGTH 100
-#define BUFFER_LENGTH 20
-#define MAX_ITEMS_FIFO 10 // kfifo uses 2-base sizes and rounds-up the power
+#define BUFFER_LENGTH 100
+#define MAX_ITEMS_CBUFFER 10 
 
 /* GLOBAL VARIABLES */
 static struct proc_dir_entry *proc_entry; /* modtimer entry */
 static struct proc_dir_entry *proc_config; /* modconfig entry */
 struct timer_list timer; /* Structure that describes the kernel timer */
 static ssize_t timer_period, max_random, emergency_threshold;
-static struct kfifo fifobuff; /* Circular buffer */
+static cbuffer_t* cbuf;  /* Circular buffer */
 struct work_struct copy_items_into_list_ws;
 typedef struct list_item { /* Node of the list */
     unsigned int data;
@@ -56,8 +56,8 @@ static void fire_timer(unsigned long data);
 /* Work's handler function, invoked to move the data in the buffer to a list */
 static void copy_items_into_list_func(struct work_struct *work);
 /* Linked list auxiliary functions */
-static void modlist_add(unsigned int num);
-static void list_cleanup(void);
+static int lista_add(unsigned int aux_buffer[], int count);
+static int list_cleanup(void);
 
 /* FILE OPS FOR PROC ENTRIES */
 static const struct file_operations proc_entry_fops = {
@@ -73,7 +73,6 @@ static const struct file_operations proc_conf_entry_fops = {
 
 /* FUNCTIONS */
 int init_modtimer( void ) {
-    int ret;
 
     /* PROC ENTRIES SETUP */
     proc_entry = proc_create("modtimer", 0666, NULL, &proc_entry_fops);
@@ -89,14 +88,13 @@ int init_modtimer( void ) {
     }
 
     /* CIRCULAR BUFFER SETUP */
-    ret = kfifo_alloc(&fifobuff, MAX_ITEMS_FIFO, GFP_KERNEL);
+    cbuf = create_cbuffer_t(MAX_ITEMS_CBUFFER);
 
-    if (ret) {
-        printk(KERN_ERR "modtimer: Can't allocate memory for the buffer\n");
-        return ret;
+    if (!cbuf) {
+        return -ENOMEM;
     }
 
-    /* KFIFO WORK STRUCTURE SETUP */
+    /* CBUFFER WORK STRUCTURE SETUP */
     INIT_WORK(&copy_items_into_list_ws, copy_items_into_list_func);
 
     /* LINKED LIST SETUP */
@@ -127,6 +125,8 @@ int init_modtimer( void ) {
 
 
 void exit_modtimer( void ) {
+
+    destroy_cbuffer_t(cbuf);
     remove_proc_entry("modtimer", NULL);
     remove_proc_entry("modconfig", NULL);
 
@@ -140,34 +140,37 @@ static void fire_timer(unsigned long data) {
     printk(KERN_INFO "Generated number: %u\n", rand_number);
 
     spin_lock_irqsave(&cbuff_sp, flags);
-    kfifo_put(&fifobuff, rand_number); // kfifo_in_spinlocked would be fine if not irqsave
+    insert_cbuffer_t(cbuf, rand_number);
     spin_unlock_irqrestore(&cbuff_sp, flags);
 
-    if (!work_pending(&copy_items_into_list_ws) && ((kfifo_len(&fifobuff) * 100 / kfifo_size(&fifobuff)) >= emergency_threshold))
+    if (!work_pending(&copy_items_into_list_ws) && size_cbuffer_t(cbuf)==((emergency_threshold*MAX_ITEMS_CBUFFER)/100)){
         schedule_work_on(!smp_processor_id(), &copy_items_into_list_ws); // just 2 cpus, 0 or 1. get the other one and queue work
+        printk("%i numeros movidos de buffer a lista\n", size_cbuffer_t(cbuf));
+    }
 
     /* Re-activate the timer 'timer_period' from now */
     mod_timer(&(timer), jiffies + timer_period);
 }
 
 static void copy_items_into_list_func(struct work_struct *work) {
-    unsigned int data = 0;
+    int count = 0;
     unsigned long flags = 0;
-    unsigned int n;
+    unsigned int aux_buffer[MAX_ITEMS_CBUFFER];
 
-    while(!kfifo_is_empty(&fifobuff)) {
+    //Primera parte
+    while(!is_empty_cbuffer_t(cbuf)) {
         spin_lock_irqsave(&cbuff_sp, flags); // can't take off the loop. blocking calls in modlist_add
-        n = kfifo_get(&fifobuff, &data);
+        aux_buffer[count] = atoi(head_cbuffer_t(cbuf));
+        remove_cbuffer_t(cbuf);
         spin_unlock_irqrestore(&cbuff_sp, flags);
-
-        modlist_add(data); // list lock inside
-
-        up(&sem_list); /* one more item into the list */
+        count++;
     }
+
+    lista_add(aux_buffer, count);
 }
 
 static ssize_t modtimer_config_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
-    char* configbuffer = (char *)vmalloc( CONFIG_BUFFER_LENGTH );
+    char* configbuffer = (char *)vmalloc( BUFFER_LENGTH );
     ssize_t buf_length = 0;
 
     if ((*off) > 0) /* Tell the application that there is nothing left to read */
@@ -192,8 +195,8 @@ static ssize_t modtimer_config_read(struct file *filp, char __user *buf, size_t 
 }
 
 static ssize_t modtimer_config_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
-    char configbuffer[CONFIG_BUFFER_LENGTH];
-    int available_space = CONFIG_BUFFER_LENGTH-1;
+    char configbuffer[BUFFER_LENGTH];
+    int available_space = BUFFER_LENGTH-1;
     ssize_t num = 0;
 
     if ((*off) > 0) /* The application can write in this entry just once !! */
@@ -244,7 +247,7 @@ static int modtimer_release(struct inode *inode, struct file *file) {
     /* Wait until all jobs scheduled so far have finished */
     flush_scheduled_work();
 
-    kfifo_free(&fifobuff);
+    clear_cbuffer_t(cbuf);
     list_cleanup();
 
     module_put(THIS_MODULE);
@@ -295,15 +298,19 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
     return buf_length;
 }
 
-static void modlist_add(unsigned int num) {
+static int lista_add(unsigned int aux_buffer[], int count){
     struct list_item* nodo = vmalloc(sizeof(struct list_item));
 
-    if (down_interruptible(&list_mtx))
-    	return -EINTR;
+    int i;
 
-    nodo->data = num;
-    list_add_tail(&nodo->links,&mylist);
-    
+     //Segunda parte
+    if (down_interruptible(&list_mtx))
+        return -EINTR;
+
+    for(i = 0; i < count; i++){
+        nodo->data = aux_buffer[i];
+        list_add_tail(&nodo->links,&mylist);
+    }
 
     if(!list_empty(&mylist) && waiting > 0){
         up(&sem_list);
@@ -311,9 +318,11 @@ static void modlist_add(unsigned int num) {
     }
 
     up(&list_mtx); 
+
+    return 0;
 }
 
-static void list_cleanup(void) {
+static int list_cleanup(void) {
     struct list_item* item=NULL;
     struct list_head* cur_node=NULL;
     struct list_head* aux=NULL;
@@ -329,6 +338,8 @@ static void list_cleanup(void) {
     }
 
     up(&list_mtx);
+
+    return 0;
 }
 
 module_init( init_modtimer );

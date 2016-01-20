@@ -1,6 +1,6 @@
 #!/bin/bash
 
-sudo rmmod modtimer
+sudo rmmod proctimer
 echo lsmod:
 lsmod | head -n 2
 echo dmesg:
