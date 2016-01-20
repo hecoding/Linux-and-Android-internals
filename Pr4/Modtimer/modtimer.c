@@ -10,6 +10,7 @@
 #include <linux/spinlock.h>
 #include <linux/semaphore.h>
 #include <linux/list.h>
+#include <linux/vmalloc.h>
 
 MODULE_LICENSE("GPL");
 
@@ -55,8 +56,7 @@ static void fire_timer(unsigned long data);
 /* Work's handler function, invoked to move the data in the buffer to a list */
 static void copy_items_into_list_func(struct work_struct *work);
 /* Linked list auxiliary functions */
-static void modlist_add(unsigned int num[], int conut);
-static struct list_item* modlist_pop(void);
+static void modlist_add(unsigned int num);
 static void list_cleanup(void);
 
 /* FILE OPS FOR PROC ENTRIES */
@@ -153,22 +153,17 @@ static void fire_timer(unsigned long data) {
 static void copy_items_into_list_func(struct work_struct *work) {
     unsigned int data = 0;
     unsigned long flags = 0;
-    unsigned int count = 0;
-    unsigned int n[10];
+    unsigned int n;
 
     while(!kfifo_is_empty(&fifobuff)) {
         spin_lock_irqsave(&cbuff_sp, flags); // can't take off the loop. blocking calls in modlist_add
-        n[count] = kfifo_get(&fifobuff, &data);
-        count++;
+        n = kfifo_get(&fifobuff, &data);
         spin_unlock_irqrestore(&cbuff_sp, flags);
 
-        modlist_add(n, count); // list lock inside
+        modlist_add(data); // list lock inside
 
-        count++;
         up(&sem_list); /* one more item into the list */
     }
-
-    printk(KERN_INFO "%u elements moved from the buffer to the list\n", count);
 }
 
 static ssize_t modtimer_config_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
@@ -260,7 +255,6 @@ static int modtimer_release(struct inode *inode, struct file *file) {
 static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
     struct list_item* item = NULL;
     struct list_head* node=NULL;
-    struct list_head* aux = NULL;
     char modlistbuffer[BUFFER_LENGTH];
     ssize_t buf_length = 0;
 
@@ -283,7 +277,7 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
             return -EINTR;
     }   
 
-    list_for_each_safe(node, &mylist) {
+    list_for_each(node, &mylist) {
     	item = list_entry(node, struct list_item, links);
     	buf_length += sprintf(modlistbuffer, "%u\n", item->data);
         list_del(node);
@@ -301,16 +295,15 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
     return buf_length;
 }
 
-static void modlist_add(unsigned int num[], int count) {
+static void modlist_add(unsigned int num) {
     struct list_item* nodo = vmalloc(sizeof(struct list_item));
-    int i;
 
     if (down_interruptible(&list_mtx))
     	return -EINTR;
-    for(i=0; i<count; i++){
-        nodo->data = num[i];
-        list_add_tail(&nodo->links,&mylist);
-    }
+
+    nodo->data = num;
+    list_add_tail(&nodo->links,&mylist);
+    
 
     if(!list_empty(&mylist) && waiting > 0){
         up(&sem_list);
