@@ -106,6 +106,8 @@ int init_modtimer( void ) {
     /* USER WAITING QUEUE SETUP */
     sema_init(&sem_list, 0);
 
+    sema_init(&list_mtx, 1);
+
     /* TIMER SETUP */
     timer_period = DEFAULT_TIMER_PERIOD;
     max_random = DEFAULT_MAX_RANDOM;
@@ -145,7 +147,6 @@ static void fire_timer(unsigned long data) {
 
     if (!work_pending(&copy_items_into_list_ws) && size_cbuffer_t(cbuf)==((emergency_threshold*MAX_ITEMS_CBUFFER)/100)){
         schedule_work_on(!smp_processor_id(), &copy_items_into_list_ws); // just 2 cpus, 0 or 1. get the other one and queue work
-        printk("%i numeros movidos de buffer a lista\n", size_cbuffer_t(cbuf));
     }
 
     /* Re-activate the timer 'timer_period' from now */
@@ -159,7 +160,7 @@ static void copy_items_into_list_func(struct work_struct *work) {
 
     while(!is_empty_cbuffer_t(cbuf)) {
         spin_lock_irqsave(&cbuff_sp, flags);
-        aux_buffer[count] = *( head_cbuffer_t(cbuf) );
+        aux_buffer[count] = head_cbuffer_t(cbuf);
         remove_cbuffer_t(cbuf);
         spin_unlock_irqrestore(&cbuff_sp, flags);
         count++;
@@ -257,6 +258,7 @@ static int modtimer_release(struct inode *inode, struct file *file) {
 static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
     struct list_item* item = NULL;
     struct list_head* node=NULL;
+    struct list_head* aux=NULL;
     char modlistbuffer[BUFFER_LENGTH];
     ssize_t buf_length = 0;
 
@@ -264,7 +266,7 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
         return -ENOSPC;
 
     if (down_interruptible(&list_mtx))
-    	return -EINTR;
+        return -EINTR;
 
     while(list_empty(&mylist)){
         waiting++;
@@ -279,9 +281,9 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
             return -EINTR;
     }   
 
-    list_for_each(node, &mylist) {
-    	item = list_entry(node, struct list_item, links);
-    	buf_length += sprintf(modlistbuffer, "%u\n", item->data);
+    list_for_each_safe(node, aux, &mylist) {
+        item = list_entry(node, struct list_item, links);
+        buf_length += sprintf(modlistbuffer + buf_length, "%u\n", item->data);
         list_del(node);
         vfree(item);
     }
@@ -298,7 +300,6 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
 }
 
 static int my_list_add(unsigned int aux_buffer[], int count){
-    struct list_item* nodo = vmalloc(sizeof(struct list_item));
 
     int i;
 
@@ -306,6 +307,7 @@ static int my_list_add(unsigned int aux_buffer[], int count){
         return -EINTR;
 
     for(i = 0; i < count; i++){
+        struct list_item* nodo = vmalloc(sizeof(struct list_item));
         nodo->data = aux_buffer[i];
         list_add_tail(&nodo->links,&mylist);
     }
@@ -326,7 +328,7 @@ static int list_cleanup(void) {
     struct list_head* aux=NULL;
 
     if (down_interruptible(&list_mtx))
-    	return -EINTR;
+        return -EINTR;
 
     list_for_each_safe(cur_node, aux, &mylist){
         item = list_entry(cur_node, struct list_item, links);
