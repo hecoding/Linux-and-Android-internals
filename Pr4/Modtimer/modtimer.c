@@ -56,7 +56,7 @@ static void fire_timer(unsigned long data);
 /* Work's handler function, invoked to move the data in the buffer to a list */
 static void copy_items_into_list_func(struct work_struct *work);
 /* Linked list auxiliary functions */
-static int lista_add(unsigned int aux_buffer[], int count);
+static int list_add(unsigned int aux_buffer[], int count);
 static int list_cleanup(void);
 
 /* FILE OPS FOR PROC ENTRIES */
@@ -157,16 +157,15 @@ static void copy_items_into_list_func(struct work_struct *work) {
     unsigned long flags = 0;
     unsigned int aux_buffer[MAX_ITEMS_CBUFFER];
 
-    //Primera parte
     while(!is_empty_cbuffer_t(cbuf)) {
-        spin_lock_irqsave(&cbuff_sp, flags); // can't take off the loop. blocking calls in modlist_add
+        spin_lock_irqsave(&cbuff_sp, flags);
         aux_buffer[count] = atoi(head_cbuffer_t(cbuf));
         remove_cbuffer_t(cbuf);
         spin_unlock_irqrestore(&cbuff_sp, flags);
         count++;
     }
 
-    lista_add(aux_buffer, count);
+    list_add(aux_buffer, count);
 }
 
 static ssize_t modtimer_config_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
@@ -298,12 +297,11 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
     return buf_length;
 }
 
-static int lista_add(unsigned int aux_buffer[], int count){
+static int list_add(unsigned int aux_buffer[], int count){
     struct list_item* nodo = vmalloc(sizeof(struct list_item));
 
     int i;
 
-     //Segunda parte
     if (down_interruptible(&list_mtx))
         return -EINTR;
 
