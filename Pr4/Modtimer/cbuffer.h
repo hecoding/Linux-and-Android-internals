@@ -46,6 +46,6 @@ void remove_items_cbuffer_t ( cbuffer_t* cbuffer, int* items, int nr_items);
 void clear_cbuffer_t (cbuffer_t* cbuffer);
 
 /* Returns a pointer to the first element in the buffer */
-int* head_cbuffer_t ( cbuffer_t* cbuffer );
+int head_cbuffer_t ( cbuffer_t* cbuffer );
 
 #endif
