@@ -203,14 +203,11 @@ void clear_cbuffer_t (cbuffer_t* cbuffer) {
 }
 
 /* Returns the first element in the buffer */
-int* head_cbuffer_t ( cbuffer_t* cbuffer )
+int head_cbuffer_t ( cbuffer_t* cbuffer )
 {
 	if ( cbuffer->size !=0 )
-		return &cbuffer->data[cbuffer->head];
+		return cbuffer->data[cbuffer->head];
 	else{
 		return -1;
 	}
 }
-
-
-
