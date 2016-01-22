@@ -231,6 +231,9 @@ static ssize_t modtimer_config_write(struct file *filp, const char __user *buf, 
 
 static int modtimer_open(struct inode *inode, struct file *file) {
 
+    if (waiting != 0) // to avoid segfault
+        return 1;
+
     /* Activate it X seconds from now */
     timer.expires=jiffies + timer_period;
     /* Activate the timer */
