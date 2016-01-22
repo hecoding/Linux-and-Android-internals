@@ -28,19 +28,26 @@ static struct proc_dir_entry *proc_entry; /* modtimer entry */
 static struct proc_dir_entry *proc_config; /* modconfig entry */
 struct timer_list timer; /* Structure that describes the kernel timer */
 static ssize_t timer_period, max_random, emergency_threshold;
-static cbuffer_t* cbuf;  /* Circular buffer */
-struct work_struct copy_items_into_list_ws;
+static cbuffer_t* cbuf_pair;  /* Circular buffer */
+static cbuffer_t* cbuf_odd;
+struct work_struct copy_items_into_list_pair_ws;
+struct work_struct copy_items_into_list_odd_ws;
 typedef struct list_item { /* Node of the list */
     unsigned int data;
     struct list_head links;
 } list_item_t;
-struct list_head mylist; /* head of the linked list. all the nodes are in dynamic memory. */
+struct list_head mylist_pair; /* head of the linked list. all the nodes are in dynamic memory. */
+struct list_head mylist_odd;
 
 /* SYNCHRONIZATION VARIABLES */
-DEFINE_SPINLOCK(cbuff_sp);
-struct semaphore list_mtx;
-struct semaphore sem_list; /* user queue consumer */
-int waiting=0;
+DEFINE_SPINLOCK(cbuff_pair_sp);
+struct semaphore list_mtx_pair;
+struct semaphore sem_list_pair; /* user queue consumer */
+int waiting_pair=0;
+DEFINE_SPINLOCK(cbuff_odd_sp);
+struct semaphore list_mtx_odd;
+struct semaphore sem_list_odd; /* user queue consumer */
+int waiting_odd=0;
 
 
 /* PROTOTYPES */
@@ -56,7 +63,7 @@ static void fire_timer(unsigned long data);
 /* Work's handler function, invoked to move the data in the buffer to a list */
 static void copy_items_into_list_func(struct work_struct *work);
 /* Linked list auxiliary functions */
-static int my_list_add(unsigned int aux_buffer[], int count);
+static int my_list_add(unsigned int aux_buffer[], int count, struct semaphore *list_mtx, struct list_head *mylist, struct semaphore *sem_list);
 static int list_cleanup(void);
 
 /* FILE OPS FOR PROC ENTRIES */
@@ -88,25 +95,30 @@ int init_modtimer( void ) {
     }
 
     /* CIRCULAR BUFFER SETUP */
-    cbuf = create_cbuffer_t(MAX_ITEMS_CBUFFER);
+    cbuf_pair = create_cbuffer_t(MAX_ITEMS_CBUFFER);
+    cbuff_odd = create_cbuffer_t(MAX_ITEMS_CBUFFER);
 
     if (!cbuf) {
         return -ENOMEM;
     }
 
     /* CBUFFER WORK STRUCTURE SETUP */
-    INIT_WORK(&copy_items_into_list_ws, copy_items_into_list_func);
+    INIT_WORK(&copy_items_into_list_pair_ws, copy_items_into_list_pair_func);
+    INIT_WORK(&copy_items_into_list_odd_ws, copy_items_into_list_odd_func);
 
     /* LINKED LIST SETUP */
-    INIT_LIST_HEAD( &mylist );
+    INIT_LIST_HEAD( &mylist_pair );
+    INIT_LIST_HEAD( &mylist_odd );
 
-    if (!list_empty(&mylist))
+    if (!list_empty(&mylist_pair) || !list_empty(&mylist_odd))
         return -ENOMEM;
 
     /* USER WAITING QUEUE SETUP */
-    sema_init(&sem_list, 0);
+    sema_init(&sem_list_pair, 0);
+    sema_init(&sem_list_odd, 0);
 
-    sema_init(&list_mtx, 1);
+    sema_init(&list_mtx_pair, 1);
+    sema_init(&list_mtx_odd, 1);
 
     /* TIMER SETUP */
     timer_period = DEFAULT_TIMER_PERIOD;
@@ -128,7 +140,8 @@ int init_modtimer( void ) {
 
 void exit_modtimer( void ) {
 
-    destroy_cbuffer_t(cbuf);
+    destroy_cbuffer_t(cbuf_pair);
+    destroy_cbuffer_t(cbuf_odd);
     remove_proc_entry("modtimer", NULL);
     remove_proc_entry("modconfig", NULL);
 
@@ -141,33 +154,61 @@ static void fire_timer(unsigned long data) {
     unsigned int rand_number = get_random_int() % (max_random - 1);
     printk(KERN_INFO "Generated number: %u\n", rand_number);
 
-    spin_lock_irqsave(&cbuff_sp, flags);
-    insert_cbuffer_t(cbuf, rand_number);
-    spin_unlock_irqrestore(&cbuff_sp, flags);
+    if(rand_number % 2) { // odd number
+        spin_lock_irqsave(&cbuff_odd_sp, flags);
+        insert_cbuffer_t(cbuf_odd, rand_number);
+        spin_unlock_irqrestore(&cbuff_odd_sp, flags);
 
-    if (!work_pending(&copy_items_into_list_ws) && size_cbuffer_t(cbuf)==((emergency_threshold*MAX_ITEMS_CBUFFER)/100)){
-        schedule_work_on(!smp_processor_id(), &copy_items_into_list_ws); // just 2 cpus, 0 or 1. get the other one and queue work
-        printk("%i elements moved from the buffer to the list\n", size_cbuffer_t(cbuf));
+        if (!work_pending(&copy_items_into_list_odd_ws) && size_cbuffer_t(cbuf_odd)==((emergency_threshold*MAX_ITEMS_CBUFFER)/100)){
+            schedule_work_on(!smp_processor_id(), &copy_items_into_list_odd_ws); // just 2 cpus, 0 or 1. get the other one and queue work
+            printk("%i elements moved from the buffer to the odd list\n", size_cbuffer_t(cbuf_odd));
+        }
+    }
+    else { // pair number
+        spin_lock_irqsave(&cbuff_pair_sp, flags);
+        insert_cbuffer_t(cbuf_pair, rand_number);
+        spin_unlock_irqrestore(&cbuff_pair_sp, flags);
+
+        if (!work_pending(&copy_items_into_list_pair_ws) && size_cbuffer_t(cbuf_pair)==((emergency_threshold*MAX_ITEMS_CBUFFER)/100)){
+            schedule_work_on(!smp_processor_id(), &copy_items_into_list_pair_ws); // just 2 cpus, 0 or 1. get the other one and queue work
+            printk("%i elements moved from the buffer to the pair list\n", size_cbuffer_t(cbuf_pair));
+        }
     }
 
     /* Re-activate the timer 'timer_period' from now */
     mod_timer(&(timer), jiffies + timer_period);
 }
 
-static void copy_items_into_list_func(struct work_struct *work) {
+static void copy_items_into_list_pair_func(struct work_struct *work) {
     int count = 0;
     unsigned long flags = 0;
     unsigned int aux_buffer[MAX_ITEMS_CBUFFER];
 
-    while(!is_empty_cbuffer_t(cbuf)) {
-        spin_lock_irqsave(&cbuff_sp, flags);
-        aux_buffer[count] = head_cbuffer_t(cbuf);
-        remove_cbuffer_t(cbuf);
-        spin_unlock_irqrestore(&cbuff_sp, flags);
+    while(!is_empty_cbuffer_t(cbuf_pair)) {
+        spin_lock_irqsave(&cbuff_pair_sp, flags);
+        aux_buffer[count] = head_cbuffer_t(cbuf_pair);
+        remove_cbuffer_t(cbuf_pair);
+        spin_unlock_irqrestore(&cbuff_pair_sp, flags);
         count++;
     }
 
-    my_list_add(aux_buffer, count);
+    my_list_add(aux_buffer, count, &list_mtx_odd, &mylist_pair, &sem_list_pair);
+}
+
+static void copy_items_into_list_odd_func(struct work_struct *work) {
+    int count = 0;
+    unsigned long flags = 0;
+    unsigned int aux_buffer[MAX_ITEMS_CBUFFER];
+
+    while(!is_empty_cbuffer_t(cbuf_odd)) {
+        spin_lock_irqsave(&cbuff_odd_sp, flags);
+        aux_buffer[count] = head_cbuffer_t(cbuf_odd);
+        remove_cbuffer_t(cbuf_odd);
+        spin_unlock_irqrestore(&cbuff_odd_sp, flags);
+        count++;
+    }
+
+    my_list_add(aux_buffer, count, &list_mtx_pair, &mylist_odd, &sem_list_pair);
 }
 
 static ssize_t modtimer_config_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
@@ -300,25 +341,26 @@ static ssize_t modtimer_read(struct file *filp, char __user *buf, size_t len, lo
     return buf_length;
 }
 
-static int my_list_add(unsigned int aux_buffer[], int count){
+static int my_list_add(unsigned int aux_buffer[], int count,
+    struct semaphore *list_mtx, struct list_head *mylist, struct semaphore *sem_list){
 
     int i;
 
-    if (down_interruptible(&list_mtx))
+    if (down_interruptible(list_mtx))
         return -EINTR;
 
     for(i = 0; i < count; i++){
         struct list_item* nodo = vmalloc(sizeof(struct list_item));
         nodo->data = aux_buffer[i];
-        list_add_tail(&nodo->links,&mylist);
+        list_add_tail(&nodo->links,mylist);
     }
 
-    if(!list_empty(&mylist) && waiting > 0){
-        up(&sem_list);
+    if(!list_empty(mylist) && waiting > 0){
+        up(sem_list);
         waiting--;
     }
 
-    up(&list_mtx); 
+    up(list_mtx); 
 
     return 0;
 }
