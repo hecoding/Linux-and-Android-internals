@@ -147,6 +147,7 @@ static void fire_timer(unsigned long data) {
 
     if (!work_pending(&copy_items_into_list_ws) && size_cbuffer_t(cbuf)==((emergency_threshold*MAX_ITEMS_CBUFFER)/100)){
         schedule_work_on(!smp_processor_id(), &copy_items_into_list_ws); // just 2 cpus, 0 or 1. get the other one and queue work
+        printk("%i elements moved from the buffer to the list\n", size_cbuffer_t(cbuf));
     }
 
     /* Re-activate the timer 'timer_period' from now */
