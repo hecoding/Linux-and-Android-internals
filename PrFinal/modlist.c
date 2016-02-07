@@ -12,7 +12,9 @@ MODULE_LICENSE("GPL");
 #define BUFFER_LENGTH 240
 DEFINE_SPINLOCK(sp);
 
-static struct proc_dir_entry *proc_entry;
+static struct proc_dir_entry *proc_control_entry;
+static struct proc_dir_entry *proc_default_entry;
+static struct proc_dir_entry *proc_dir=NULL;
 
 /* Nodos de la lista */
 typedef struct list_item {
@@ -22,11 +24,16 @@ typedef struct list_item {
 
 struct list_head mylist; /* Lista enlazada. OJO todos los demás nodos están en memoria dinámica. */
 
+static ssize_t control_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static void modlist_add(int num);
 static void modlist_remove(int num);
 static void modlist_cleanup(void);
+
+static const struct file_operations proc_control_fops = {
+    .write = control_write,    
+};
 
 static const struct file_operations proc_entry_fops = {
     .read = modlist_read,
@@ -38,19 +45,26 @@ int init_modlist_module( void )
   int ret = 0;
   INIT_LIST_HEAD( &mylist );
 
+  /* Create proc directory */
+  proc_dir=proc_mkdir("multilist",NULL);
 
-  if (!list_empty(&mylist)) {
-    ret = -ENOMEM;
-  } else {
+  if (!proc_dir)
+      return -ENOMEM;
 
-    proc_entry = proc_create( "modlist", 0666, NULL, &proc_entry_fops);
-    if (proc_entry == NULL) {
-      ret = -ENOMEM;
-      printk(KERN_INFO "modlist: Can't create /proc entry\n");
-    } else {
-      printk(KERN_INFO "modlist: Module loaded\n");
-    }
+  /* Create proc entry /proc/multilist/control */
+  proc_control_entry = proc_create( "control", 0666, proc_dir, &proc_control_fops);
+  proc_default_entry = proc_create( "default", 0666, proc_dir, &proc_entry_fops);
+
+  if (proc_control_entry == NULL) {
+      remove_proc_entry("multilist", NULL);
+      printk(KERN_INFO "multilist: Can't create /proc entry\n");
+      return -ENOMEM;
   }
+
+  if (!list_empty(&mylist))
+    ret = -ENOMEM;
+
+  printk(KERN_INFO "multilist: Module loaded\n");
 
   return ret;
 
@@ -58,13 +72,21 @@ int init_modlist_module( void )
 
 void exit_modlist_module( void )
 {
-  remove_proc_entry("modlist", NULL);
+  // TODO remove all entries including default
+  remove_proc_entry("default", proc_dir);
+  remove_proc_entry("control", proc_dir);
+  remove_proc_entry("multilist", NULL);
   //vfree(&mylist); LA CABEZA NO ESTÁ EN MEMORIA DINÁMICA, CON HACER UN CLEANUP VALE
   modlist_cleanup(); // <- porque los demás nodos sí están en memoria dinámica pero mylist en la pila
   
-  printk(KERN_INFO "modlist: Module unloaded.\n");
+  printk(KERN_INFO "multilist: Module unloaded.\n");
 }
 
+
+static ssize_t control_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
+
+    return 0;
+}
 
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
   char modlistbuffer[BUFFER_LENGTH];
@@ -110,7 +132,7 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
     return 0;
   
   if (len > available_space) {
-    printk(KERN_INFO "modlist: not enough space!!\n");
+    printk(KERN_INFO "multilist: not enough space!!\n");
     return -ENOSPC;
   }
   
