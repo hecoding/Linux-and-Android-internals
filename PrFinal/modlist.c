@@ -11,28 +11,29 @@ MODULE_LICENSE("GPL");
 
 #define BUFFER_LENGTH 240
 #define ENTRY_NAME_LENGTH 20
-DEFINE_SPINLOCK(sp);
 
 static struct proc_dir_entry *proc_control_entry;
-static struct proc_dir_entry *proc_default_entry;
 static struct proc_dir_entry *proc_dir=NULL;
 
-/* Nodos de la lista */
+/* List nodes */
 typedef struct list_item {
 	int data;
 	struct list_head links;
 } list_item_t;
 
-struct list_head mylist; /* Lista enlazada. OJO todos los demás nodos están en memoria dinámica. */
+typedef struct proc_list {
+	spinlock_t sp;
+	struct list_head head;
+} proc_list_t;
 
 static ssize_t control_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static ssize_t control_add(char* name);
-static void control_remove(char* name);
+static void control_remove(char* name, struct file *filp);
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
-static void modlist_add(int num);
-static void modlist_remove(int num);
-static void modlist_cleanup(void);
+static void modlist_add(int num, struct proc_list* pl);
+static void modlist_remove(int num, struct proc_list* pl);
+static void modlist_cleanup(struct proc_list* pl);
 
 static const struct file_operations proc_control_fops = {
     .write = control_write,    
@@ -46,7 +47,6 @@ static const struct file_operations proc_entry_fops = {
 int init_modlist_module( void )
 {
   int ret = 0;
-  INIT_LIST_HEAD( &mylist );
 
   /* Create proc directory */
   proc_dir=proc_mkdir("multilist",NULL);
@@ -56,16 +56,14 @@ int init_modlist_module( void )
 
   /* Create proc entry /proc/multilist/control */
   proc_control_entry = proc_create( "control", 0666, proc_dir, &proc_control_fops);
-  proc_default_entry = proc_create( "default", 0666, proc_dir, &proc_entry_fops);
+  /* Add default entry */
+  control_add("default");
 
   if (proc_control_entry == NULL) {
       remove_proc_entry("multilist", NULL);
       printk(KERN_INFO "multilist: Can't create /proc entry\n");
       return -ENOMEM;
   }
-
-  if (!list_empty(&mylist))
-    ret = -ENOMEM;
 
   printk(KERN_INFO "multilist: Module loaded\n");
   //try_module_get(THIS_MODULE);
@@ -78,7 +76,7 @@ void exit_modlist_module( void )
   remove_proc_entry("control", proc_dir);
   remove_proc_entry("multilist", NULL);
   //vfree(&mylist); LA CABEZA NO ESTÁ EN MEMORIA DINÁMICA, CON HACER UN CLEANUP VALE
-  modlist_cleanup(); // <- porque los demás nodos sí están en memoria dinámica pero mylist en la pila
+  //modlist_cleanup(); // <- porque los demás nodos sí están en memoria dinámica pero mylist en la pila
   
   printk(KERN_INFO "multilist: Module unloaded.\n");
   //module_put(THIS_MODULE);
@@ -108,7 +106,7 @@ static ssize_t control_write(struct file *filp, const char __user *buf, size_t l
     control_add(name);
 	}
   else if(sscanf(modlistbuffer, "remove %s", name) == 1) {
-    control_remove(name);
+    control_remove(name, filp);
 	}
 
   *off+=len; /* Update the file pointer */
@@ -117,17 +115,36 @@ static ssize_t control_write(struct file *filp, const char __user *buf, size_t l
 }
 
 static ssize_t control_add(char* name) {
-  if (proc_create(name, 0666, proc_dir, &proc_entry_fops) == NULL)
-      return -ENOMEM;
+  struct proc_list* pl = vmalloc(sizeof(struct proc_list));
+  INIT_LIST_HEAD( &pl->head );
+  spin_lock_init( &pl->sp );
+
+  if (!list_empty(&pl->head))
+    return -ENOMEM;
+
+  if (proc_create_data(name, 0666, proc_dir, &proc_entry_fops, pl) == NULL)
+    return -ENOMEM;
   
   return 0;
 }
 
-static void control_remove(char* name) {
+static void control_remove(char* name, struct file *filp) {
+  /* Remove associated list */
+  struct proc_list* pl = (struct proc_list*) PDE_DATA(filp->f_inode);
+  modlist_cleanup(pl);
+  vfree(pl);
+
+  /* Remove entry */
   remove_proc_entry(name, proc_dir);
+
+  //stderr Write error: entry doesn't exist
+  //printk(KERN_INFO "multilist: non-existing entry remove\n");
 }
 
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
+  struct proc_list* pl = (struct proc_list*) PDE_DATA(filp->f_inode);
+  spinlock_t sp = pl->sp;
+  struct list_head mylist = pl->head;
   char modlistbuffer[BUFFER_LENGTH];
   struct list_item* item=NULL;
   struct list_head* cur_node=NULL;
@@ -163,6 +180,7 @@ static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, lof
 }
 
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
+  struct proc_list* pl = (struct proc_list*) PDE_DATA(filp->f_inode);
   char modlistbuffer[BUFFER_LENGTH];
   int available_space = BUFFER_LENGTH-1;
   int num = 0;
@@ -182,13 +200,13 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
   modlistbuffer[len] = '\0'; /* Add the `\0' */ 
 
   if(sscanf(modlistbuffer, "add %i", &num) == 1) {
-    modlist_add(num);
+    modlist_add(num, pl);
 	}
   else if(sscanf(modlistbuffer, "remove %i", &num) == 1) {
-    modlist_remove(num);
+    modlist_remove(num, pl);
 	}
   else if(strcmp(modlistbuffer, "cleanup\n") == 0) {
-      modlist_cleanup();
+      modlist_cleanup(pl);
 	}
 
   *off+=len;           /* Update the file pointer */
@@ -196,7 +214,9 @@ static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t l
   return len;
 }
 
-static void modlist_add(int num) {
+static void modlist_add(int num, struct proc_list* pl) {
+  spinlock_t sp = pl->sp;
+  struct list_head mylist = pl->head;
   struct list_item* nodo = vmalloc(sizeof(struct list_item));
   
   nodo->data = num;
@@ -206,7 +226,9 @@ static void modlist_add(int num) {
   spin_unlock(&sp); 
 }
 
-static void modlist_remove(int num) {
+static void modlist_remove(int num, struct proc_list* pl) {
+  spinlock_t sp = pl->sp;
+  struct list_head mylist = pl->head;
   struct list_item* item=NULL;
   struct list_head* cur_node=NULL;
   struct list_head* aux=NULL;
@@ -223,7 +245,9 @@ static void modlist_remove(int num) {
   spin_unlock(&sp); 
 }
 
-static void modlist_cleanup(void) {
+static void modlist_cleanup(struct proc_list* pl) {
+  spinlock_t sp = pl->sp;
+  struct list_head mylist = pl->head;
   struct list_item* item=NULL;
   struct list_head* cur_node=NULL;
   struct list_head* aux=NULL;
