@@ -10,6 +10,7 @@
 MODULE_LICENSE("GPL");
 
 #define BUFFER_LENGTH 240
+#define ENTRY_NAME_LENGTH 20
 DEFINE_SPINLOCK(sp);
 
 static struct proc_dir_entry *proc_control_entry;
@@ -25,6 +26,8 @@ typedef struct list_item {
 struct list_head mylist; /* Lista enlazada. OJO todos los demás nodos están en memoria dinámica. */
 
 static ssize_t control_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
+static ssize_t control_add(char* name);
+static void control_remove(char* name);
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off);
 static ssize_t modlist_write(struct file *filp, const char __user *buf, size_t len, loff_t *off);
 static void modlist_add(int num);
@@ -65,27 +68,63 @@ int init_modlist_module( void )
     ret = -ENOMEM;
 
   printk(KERN_INFO "multilist: Module loaded\n");
+  //try_module_get(THIS_MODULE);
 
   return ret;
-
 }
 
 void exit_modlist_module( void )
 {
-  // TODO remove all entries including default
-  remove_proc_entry("default", proc_dir);
   remove_proc_entry("control", proc_dir);
   remove_proc_entry("multilist", NULL);
   //vfree(&mylist); LA CABEZA NO ESTÁ EN MEMORIA DINÁMICA, CON HACER UN CLEANUP VALE
   modlist_cleanup(); // <- porque los demás nodos sí están en memoria dinámica pero mylist en la pila
   
   printk(KERN_INFO "multilist: Module unloaded.\n");
+  //module_put(THIS_MODULE);
 }
 
 
 static ssize_t control_write(struct file *filp, const char __user *buf, size_t len, loff_t *off) {
-
+  char modlistbuffer[BUFFER_LENGTH];
+  int available_space = BUFFER_LENGTH-1;
+  char name[ENTRY_NAME_LENGTH];
+  
+  if ((*off) > 0) /* The application can write in this entry just once !! */
     return 0;
+  
+  if (len > available_space) {
+    printk(KERN_INFO "multilist: not enough space!!\n");
+    return -ENOSPC;
+  }
+  
+  /* Transfer data from user to kernel space */
+  if (copy_from_user( &modlistbuffer[0], buf, len ))  
+    return -EFAULT;
+
+  modlistbuffer[len] = '\0'; /* Add the `\0' */ 
+
+  if(sscanf(modlistbuffer, "create %s", name) == 1) {
+    control_add(name);
+	}
+  else if(sscanf(modlistbuffer, "remove %s", name) == 1) {
+    control_remove(name);
+	}
+
+  *off+=len; /* Update the file pointer */
+
+  return len;
+}
+
+static ssize_t control_add(char* name) {
+  if (proc_create(name, 0666, proc_dir, &proc_entry_fops) == NULL)
+      return -ENOMEM;
+  
+  return 0;
+}
+
+static void control_remove(char* name) {
+  remove_proc_entry(name, proc_dir);
 }
 
 static ssize_t modlist_read(struct file *filp, char __user *buf, size_t len, loff_t *off) {
@@ -198,6 +237,10 @@ static void modlist_cleanup(void) {
   }
   spin_unlock(&sp);
 }
+
+// TODO llevar una lista con las entradas creadas para:
+//	- al borrar una entrada que no exista no pete
+//	- limpiar todas las entradas (y por tanto las listas) al quitar el módulo
 
 
 module_init( init_modlist_module );
